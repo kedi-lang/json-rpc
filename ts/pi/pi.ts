@@ -18,6 +18,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   type AssistantMessage,
+  type ImageContent,
+  type TextContent,
   type AssistantMessageEventStream,
   createAssistantMessageEventStream,
   getCurrentSystemPrompt,
@@ -220,7 +222,24 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
     });
   }
 
+  const turn = params.continuation ? params.continuation.message : await userTurn(params, run.signal);
   const kedi = (pi: ExtensionAPI) => {
+    if (Array.isArray(turn)) {
+      // pi sends a user turn as its text, then its images; Kedi put each image where its
+      // label is. Every request of the run carries the turn in Kedi's order.
+      const flattened = turn.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+      pi.on("context", async (event) => {
+        let restored = false;
+        const messages = event.messages.map((message) => {
+          if (restored || message.role !== "user" || !Array.isArray(message.content)) return message;
+          const said = message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+          if (said !== flattened) return message;
+          restored = true;
+          return { ...message, content: turn };
+        });
+        return restored ? { messages } : undefined;
+      });
+    }
     pi.on("before_agent_start", async (event) => {
       // Kedi's system text follows pi's own prompt.
       if (params.system) return { systemPrompt: `${event.systemPrompt}\n\n${params.system}` };
@@ -307,16 +326,29 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
     settingsManager,
     resourceLoader,
     customTools: kediTools,
+    // Kedi's > effort: is pi's thinking level, clamped to what the model supports.
+    ...(params.effort ? { thinkingLevel: params.effort } : {}),
   });
 
   const real = session.agent.streamFunction;
+  const sampling = streamSettings(params.settings);
+  let replies = 0;
   session.agent.streamFunction = (requestModel, context, options) => {
     // Once Kedi stopped the run, pi makes no further request: it gets the stop as its answer.
     if (failure !== undefined) return replay(failed(requestModel, failure, true));
     const answered = run
       .modelRequest<AssistantMessage>({
         async send(_model, signal) {
-          const stream = await real(requestModel, context, { ...options, signal: AbortSignal.any([signal, ...(options?.signal ? [options.signal] : [])]) });
+          const stream = await real(requestModel, context, {
+            ...options,
+            ...sampling,
+            signal: AbortSignal.any([signal, ...(options?.signal ? [options.signal] : [])]),
+          });
+          // The model's text as it streams, for Kedi's event observers.
+          const messageId = `${run.id}-${replies + 1}`;
+          for await (const event of stream) {
+            if (event.type === "text_delta") run.event("message.delta", { messageId, text: event.delta });
+          }
           return stream.result();
         },
         describe: () => describe(context),
@@ -329,6 +361,16 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
           cacheWriteTokens: message.usage.cacheWrite,
         }),
       })
+      .then((message) => {
+        replies += 1;
+        const said = text(message);
+        if (said) {
+          // Text beside tool calls is commentary; a reply without them is the answer.
+          const phase = message.content.some((part) => part.type === "toolCall") ? "commentary" : "final";
+          run.event("message.completed", { messageId: `${run.id}-${replies}`, text: said, phase });
+        }
+        return message;
+      })
       .catch((error: unknown) => {
         failure ??= error;
         return failed(requestModel, error, run.signal.aborted);
@@ -337,12 +379,16 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
   };
 
   const state = (): JsonObject => ({ state: { entries: sessionManager.getEntries() as unknown as Json } });
-  run.onInput((texts) => texts.forEach((said) => void session.steer(said)), { on: "arrival" });
+  // Kedi's text reaches pi as written: no command dispatch or template expansion.
+  run.onInput(
+    (texts) => texts.forEach((said) => void session.sendUserMessage(said, { deliverAs: "steer", expandPromptTemplates: false })),
+    { on: "arrival" },
+  );
   run.onInterrupt(state);
   const stop = () => void session.abort();
   run.signal.addEventListener("abort", stop, { once: true });
   try {
-    await session.prompt(params.continuation ? params.continuation.message : params.user);
+    await session.sendUserMessage(turn, { expandPromptTemplates: false });
   } finally {
     run.signal.removeEventListener("abort", stop);
   }
@@ -362,12 +408,44 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
   }
 }
 
+/** The run's `> settings:` as pi's request options: the ones every pi provider applies alike. */
+export function streamSettings(settings: JsonObject | undefined): { temperature?: number; maxTokens?: number } {
+  const options: { temperature?: number; maxTokens?: number } = {};
+  if (typeof settings?.temperature === "number") options.temperature = settings.temperature;
+  if (typeof settings?.max_tokens === "number") options.maxTokens = settings.max_tokens;
+  return options;
+}
+
+/** The user turn with its images where Kedi put them; pi takes images as base64. */
+async function userTurn(params: Run["params"], signal: AbortSignal): Promise<string | (TextContent | ImageContent)[]> {
+  if (!params.userContent) return params.user;
+  const parts: (TextContent | ImageContent)[] = [];
+  for (const part of params.userContent) {
+    if (part.type === "text") {
+      parts.push({ type: "text", text: part.text });
+      continue;
+    }
+    if ("data" in part && part.data !== undefined) {
+      parts.push({ type: "image", data: part.data, mimeType: part.mediaType ?? "image/png" });
+      continue;
+    }
+    const response = await fetch(part.url!, { signal });
+    if (!response.ok) throw new Error(`could not fetch ${part.name} from ${part.url}: ${response.status}`);
+    const mimeType = part.mediaType ?? response.headers.get("content-type") ?? "image/png";
+    parts.push({ type: "image", data: Buffer.from(await response.arrayBuffer()).toString("base64"), mimeType });
+  }
+  return parts;
+}
+
 /** The pi bridge: its handshake, and a run on a fresh pi session in `cwd`. */
 export function piBridge(options: PiBridgeOptions): Bridge {
   return {
     handshake: {
       backend: { name: "pi", version: "1.5.2" },
       kind: "agent-harness",
+      mediaKinds: ["image"],
+      settings: ["temperature", "max_tokens"],
+      effort: ["minimal", "low", "medium", "high", "xhigh", "max"],
       capabilities: {
         tools: true,
         structuredOutput: true,
@@ -380,6 +458,8 @@ export function piBridge(options: PiBridgeOptions): Bridge {
         interrupt: true,
         usage: true,
         sessions: true,
+        events: true,
+        mediaInput: true,
         testModel: true,
       },
     },

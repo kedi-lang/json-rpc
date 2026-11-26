@@ -23,9 +23,13 @@ providers' environment variables (such as `GEMINI_API_KEY`) or `~/.pi/agent/auth
 | pi's tools (read, bash, edit, write) under Kedi's hooks, approval and budgets (`nativeTools`) | an inline extension's `tool_call` and `tool_result`: risk `read_only` for read, `mutating` for edit and write, `sensitive` for bash; an edit replaces the arguments pi runs |
 | Kedi's tools | pi custom tools that call `tool/call` |
 | Structured output (`nativeStructuredOutput`) | a pi tool named after the output, whose arguments are the answer; a JSON text answer is accepted too |
-| Live input, interrupts | `session.steer()`, `session.abort()` |
+| Live input, interrupts | steering messages, `session.abort()` |
+| `> effort:` | pi's thinking level (`minimal` to `max`), clamped to the model |
+| `> settings:` | `temperature` and `max_tokens`, which every pi provider applies alike; Kedi refuses other names |
+| Media input | images, base64 or fetched from their URL; each request carries the user turn in Kedi's order (pi itself sends text, then images) |
+| Events | `message.delta` as the model streams, `message.completed` with `commentary` beside tool calls and `final` for the answer |
 | Sessions | the session's entries are the state Kedi hands back |
-| Model-visible text is Kedi's | no discovered extensions, skills, prompt templates or context files (AGENTS.md); Kedi's system text follows pi's own prompt |
+| Model-visible text is Kedi's | no discovered extensions, skills, prompt templates or context files (AGENTS.md); Kedi's system text follows pi's own prompt; Kedi's text is never run as a pi command or template |
 
 A step Kedi denies ends the run with Kedi's error, and pi makes no request after it.
 
@@ -46,4 +50,4 @@ python ../../testing/fake_kedi.py --bridge "node bridge.ts" ../../fixtures/v1/*.
 with no `node_modules`. The bundle carries the conformance fixtures, so its preflight runs
 wherever it is copied.
 
-Not yet: transcript mode, MCP servers, streaming events, media input, model fallback.
+Not yet: transcript mode, MCP servers, model fallback.

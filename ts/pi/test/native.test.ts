@@ -2,60 +2,13 @@
 // check this: they do not know a bridge's own tools.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { PassThrough } from "node:stream";
 import { test } from "node:test";
-// Internal modules, not index.ts: the entry module redirects stdout, which the test runner reports on.
-import { connect } from "../../sdk/src/connection.ts";
-import { type JsonObject, Peer, RpcError } from "../../sdk/src/peer.ts";
-import { piBridge } from "../pi.ts";
-
-type Answers = Partial<Record<"approval/request" | "budget/admit" | "hook/invoke" | "artifact/admit", (params: JsonObject) => JsonObject>>;
+import { type JsonObject, RpcError } from "../../sdk/src/peer.ts";
+import { type Answers, exchange, readsTheNote } from "./harness.ts";
 
 /** Runs one prompt on the pi bridge: the model reads note.txt, then answers with what it saw. */
 async function readNote(answers: Answers, run: JsonObject = {}) {
-  const cwd = mkdtempSync(join(tmpdir(), "kedi-pi-test-"));
-  writeFileSync(join(cwd, "note.txt"), "The secret word is kedi.\n");
-  const toBridge = new PassThrough();
-  const fromBridge = new PassThrough();
-  const connection = connect(piBridge({ cwd }), toBridge, { write: (frame: string) => fromBridge.write(frame) });
-  const kedi = new Peer(fromBridge, { write: (frame: string) => toBridge.write(frame) });
-  const steps: string[] = [];
-  const seen: JsonObject[] = [];
-  kedi.onRequest("model/complete", async (params) => {
-    seen.push(params);
-    steps.push("model");
-    if (seen.length === 1) return { message: { role: "assistant", parts: [{ type: "toolCall", id: "t1", name: "read", arguments: { path: "note.txt" } }] } };
-    const result = JSON.stringify(params.messages).match(/"toolResult","id":"t1","result":"((?:[^"\\]|\\.)*)"/)?.[1] ?? "";
-    return { message: { role: "assistant", parts: [{ type: "text", text: `saw: ${result}` }] } };
-  });
-  for (const method of ["approval/request", "budget/admit", "hook/invoke", "artifact/admit"] as const) {
-    kedi.onRequest(method, async (params) => {
-      steps.push(method === "hook/invoke" ? String(params.event) : method === "budget/admit" ? `admit ${params.dimension}` : method);
-      const answer = answers[method];
-      if (answer) return answer(params);
-      if (method === "approval/request") return { decision: "allow" };
-      if (method === "budget/admit") return { admitted: true };
-      if (method === "artifact/admit") return { result: params.result as never };
-      return params.event === "pre_tool_use" ? { decision: "continue" } : {};
-    });
-  }
-  await kedi.request("initialize", { protocolVersion: 1, client: { name: "test" }, testModel: true });
-  const params = {
-    runId: "r", callKind: "invoke", promptKind: "raw", model: "test", system: null, instructionParts: [], user: "Read note.txt.",
-    userContent: null, output: null, tools: [], continuation: null, session: null, subagent: null, ...run,
-  };
-  try {
-    return { result: await kedi.request("run", params as JsonObject), steps, seen };
-  } catch (error) {
-    return { error: error as RpcError, steps, seen };
-  } finally {
-    toBridge.end();
-    fromBridge.end();
-    await connection.closed;
-  }
+  return exchange({ model: readsTheNote, answers, run });
 }
 
 test("a pi tool call takes the hooks, approval, admission and artifact admission in order", async () => {
