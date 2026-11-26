@@ -618,6 +618,9 @@ async function userTurn(params: Run["params"], signal: AbortSignal): Promise<str
 /** The pi bridge: its handshake, and a run on a fresh pi session in `cwd`. */
 export function piBridge(options: PiBridgeOptions): Bridge {
   return {
+    // pi converts and resizes images with photon's WebAssembly module, which a bundle carries
+    // beside bridge.mjs.
+    files: ["photon_rs_bg.wasm"],
     handshake: {
       backend: { name: "pi", version: "1.5.2" },
       kind: "agent-harness",

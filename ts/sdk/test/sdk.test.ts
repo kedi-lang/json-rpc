@@ -124,7 +124,20 @@ suite("cache", () => {
     const bridge = minimal({ testModel: true });
     const before = fingerprint(bridge, join(installed, "bridge.mjs"));
     writeFileSync(join(home, "notes.txt"), "v2");
+    writeFileSync(join(installed, "unrelated.txt"), "beside the bridge, not declared");
     assert.equal(fingerprint(bridge, join(installed, "bridge.mjs")), before);
+  });
+
+  test("the fingerprint covers the files a bridge declares it loads, present or missing", () => {
+    const installed = mkdtempSync(join(tmpdir(), "kedi-bridge-"));
+    writeFileSync(join(installed, "bridge.mjs"), "// bridge\n");
+    const bridge = { ...minimal({ testModel: true }), files: ["module.wasm"] };
+    const entry = join(installed, "bridge.mjs");
+    const missing = fingerprint(bridge, entry);
+    writeFileSync(join(installed, "module.wasm"), "v1");
+    const present = fingerprint(bridge, entry);
+    writeFileSync(join(installed, "module.wasm"), "v2");
+    assert.equal(new Set([missing, present, fingerprint(bridge, entry)]).size, 3);
   });
 
   test("the fingerprint covers the handshake", () => {

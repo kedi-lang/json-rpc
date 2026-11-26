@@ -54,7 +54,7 @@ needs it. A bridge must advertise only what it implements.
 | `tools` | calls Kedi's tools with `tool/call` |
 | `nativeStructuredOutput`, `nativeToolCalling` | sends Kedi's schema and tools as its backend's native fields; otherwise Kedi puts them in its own protocol text |
 | `nativeTools` | runs tools of its own; each call goes through `hook/invoke`, `approval/request` and, with `governed`, `budget/admit`, and each result through `artifact/admit` |
-| `events` | sends `run/event` while a run runs |
+| `events` | sends `run/event` while a run runs: `message.delta` as text streams, and `message.completed` with `phase: commentary` for the model's text beside its tool calls. A `final` completion is optional: Kedi reports the answer from the run's result |
 | `mediaInput` | sends prompt media to its backend; needs `mediaKinds` |
 | `sessions` | continues a conversation from the `state` Kedi hands back (state mode) |
 | `transcript` | lets Kedi hold the conversation (transcript mode); asks `history/process` when told |

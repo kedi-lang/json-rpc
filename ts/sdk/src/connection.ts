@@ -8,6 +8,11 @@ import type { RunAnswer, RunParams } from "./types.ts";
 
 export interface Bridge {
   handshake: Handshake;
+  /**
+   * Files the bridge loads at run time beside its entry, such as a WebAssembly module a bundle
+   * cannot carry, relative to the entry's directory. The preflight's cached result covers them.
+   */
+  files?: string[];
   /** Runs one `run` request; `run.signal` aborts when Kedi cancels or interrupts it. */
   run(run: Run): Promise<RunAnswer>;
 }

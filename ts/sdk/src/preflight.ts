@@ -168,6 +168,12 @@ export function fingerprint(bridge: Bridge, entry: string): string {
     hash.update(`${file}\n`);
     hash.update(readFileSync(file));
   }
+  // A declared file that is missing counts as missing: it breaks the bridge as a changed one does.
+  for (const name of bridge.files ?? []) {
+    const file = resolve(dirname(resolve(entry)), name);
+    hash.update(`declared ${name}\n`);
+    hash.update(existsSync(file) ? readFileSync(file) : "missing");
+  }
   return hash.digest("hex").slice(0, 32);
 }
 
