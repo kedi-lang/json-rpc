@@ -127,6 +127,76 @@ function toKedi(message: Message): TranscriptMessage | undefined {
   }
 }
 
+/** A pi message in Kedi's transcript schema, carrying the pi message itself as providerData. */
+function toKediMessage(message: Message): TranscriptMessage | undefined {
+  const kedi = toKedi(message);
+  return kedi && { ...kedi, providerData: message as unknown as Json };
+}
+
+function sameParts(left: TranscriptMessage, right: TranscriptMessage | undefined): boolean {
+  return right !== undefined && left.role === right.role && JSON.stringify(left.parts) === JSON.stringify(right.parts);
+}
+
+/**
+ * Kedi's transcript as pi messages. A message Kedi did not change is its pi message as given
+ * (providerData keeps pi's own fields, such as thinking signatures); a changed one, or one pi
+ * never saw, is built from its parts. Media named by ref come from Kedi (media/get).
+ */
+async function piMessages(transcript: TranscriptMessage[], run: Run, model: Model<any>): Promise<Message[]> {
+  const names = new Map<string, string>();
+  const messages: Message[] = [];
+  for (const message of transcript) {
+    for (const part of message.parts) if (part.type === "toolCall") names.set(part.id, part.name);
+    const given = message.providerData as unknown as Message | undefined;
+    if (given && typeof given === "object" && "role" in given && sameParts(message, toKedi(given))) {
+      messages.push(given);
+      continue;
+    }
+    if (message.role === "assistant") {
+      messages.push(fromKedi(message, model));
+    } else if (message.role === "tool") {
+      for (const part of message.parts) {
+        if (part.type !== "toolResult") continue;
+        const said = typeof part.result === "string" ? part.result : JSON.stringify(part.result);
+        messages.push({
+          role: "toolResult",
+          toolCallId: part.id,
+          toolName: names.get(part.id) ?? "tool",
+          content: [{ type: "text", text: said }],
+          isError: part.isError === true,
+          timestamp: Date.now(),
+        } as Message);
+      }
+    } else {
+      const content: (TextContent | ImageContent)[] = [];
+      for (const part of message.parts) {
+        if (part.type === "text") content.push({ type: "text", text: part.text });
+        else if (part.type === "media") content.push(await image(part, run));
+      }
+      messages.push({ role: "user", content, timestamp: Date.now() });
+    }
+  }
+  return messages;
+}
+
+/** A transcript media part as pi's base64 image: inline, by URL, or by ref from Kedi. */
+async function image(part: Extract<TranscriptPart, { type: "media" }>, run: Run): Promise<ImageContent> {
+  const media = part.data !== undefined || part.url !== undefined ? part : ((await run.media(part.ref!)) as typeof part);
+  if (media.data !== undefined) return { type: "image", data: media.data, mimeType: media.mediaType ?? "image/png" };
+  const response = await fetch(media.url!, { signal: run.signal });
+  if (!response.ok) throw new Error(`could not fetch ${part.ref ?? media.url}: ${response.status}`);
+  const mimeType = media.mediaType ?? response.headers.get("content-type") ?? "image/png";
+  return { type: "image", data: Buffer.from(await response.arrayBuffer()).toString("base64"), mimeType };
+}
+
+/** The user turn in Kedi's schema: its text, and its media by name, where Kedi put them. */
+function kediTurn(params: Run["params"]): TranscriptMessage {
+  const parts: TranscriptPart[] = params.userContent
+    ? params.userContent.map((part) => (part.type === "text" ? { type: "text", text: part.text } : { type: "media", ref: part.name }))
+    : [{ type: "text", text: params.user }];
+  return { role: "user", parts };
+}
+
 function describe(context: { messages: Message[] }): ModelCall {
   return {
     system: getCurrentSystemPrompt(context.messages),
@@ -317,6 +387,10 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
   await resourceLoader.reload();
   const entries = ((params.session?.state as JsonObject | null)?.entries ?? undefined) as never;
   const sessionManager = SessionManager.inMemory(cwd, undefined, entries);
+  // Transcript mode: Kedi holds the conversation and hands it over each turn.
+  const transcriptMode = Array.isArray(params.history);
+  const loaded = transcriptMode ? await piMessages(params.history!, run, model) : [];
+  for (const message of loaded) sessionManager.appendMessage(message);
   if (params.continuation) {
     // The rejected answer as pi's last turn; Kedi's correction is then the prompt.
     sessionManager.appendMessage({ role: "user", content: params.user, timestamp: Date.now() });
@@ -340,9 +414,23 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
   const real = session.agent.streamFunction;
   const sampling = streamSettings(params.settings);
   let replies = 0;
+  // History processing: Kedi's processed conversation so far, and how many of pi's messages it
+  // covers; later messages join it before the next request.
+  let processed: TranscriptMessage[] = params.history ?? [];
+  let covered = loaded.length;
+  /** pi's conversation in Kedi's schema; the turn's user message in Kedi's own layout. */
+  const asKedi = (messages: Message[], offset: number): TranscriptMessage[] =>
+    messages.flatMap((message, index) => {
+      if (offset + index === loaded.length) return [kediTurn(params)];
+      const kedi = toKediMessage(message);
+      return kedi ? [kedi] : [];
+    });
   session.agent.streamFunction = (requestModel, context, options) => {
     // Once Kedi stopped the run, pi makes no further request: it gets the stop as its answer.
     if (failure !== undefined) return replay(failed(requestModel, failure, true));
+    const system = context.messages.filter((message) => message.role === "system");
+    const conversation = context.messages.filter((message) => message.role !== "system");
+    let sent = context;
     const answered = run
       .modelRequest<AssistantMessage>({
         async send(name, signal) {
@@ -350,7 +438,7 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
           const fallback = name !== null && name !== params.model;
           const target = fallback ? catalogModel(runtime, name) : requestModel;
           const { apiKey: _key, headers: _headers, ...unauthenticated } = options ?? {};
-          const stream = await real(target, context, {
+          const stream = await real(target, sent, {
             ...(fallback ? unauthenticated : options),
             ...sampling,
             signal: AbortSignal.any([signal, ...(options?.signal ? [options.signal] : [])]),
@@ -365,7 +453,19 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
           if (message.stopReason === "error") throw new Error(message.errorMessage ?? `${target.provider}/${target.id} failed`);
           return message;
         },
-        describe: () => describe(context),
+        describe: () => describe(sent),
+        ...(params.processHistory
+          ? {
+              history: {
+                get: () => [...processed, ...asKedi(conversation.slice(covered), covered)],
+                set: async (kept: TranscriptMessage[]) => {
+                  processed = kept;
+                  covered = conversation.length;
+                  sent = { ...context, messages: [...system, ...(await piMessages(kept, run, requestModel))] };
+                },
+              },
+            }
+          : {}),
         reply: (message) => fromKedi(message, requestModel),
         usage: (message) => ({
           inputTokens: message.usage.input,
@@ -392,13 +492,19 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
     return answered.then(replay);
   };
 
-  const state = (): JsonObject => ({ state: { entries: sessionManager.getEntries() as unknown as Json } });
+  const back = (): JsonObject => {
+    const messages = session.messages.filter((message): message is Message => ["user", "assistant", "toolResult"].includes(message.role));
+    if (params.processHistory) return { transcript: [...processed, ...asKedi(messages.slice(covered), covered)] as unknown as Json };
+    if (transcriptMode) return { messages: asKedi(messages.slice(loaded.length), loaded.length) as unknown as Json };
+    if (params.session) return { state: { entries: sessionManager.getEntries() as unknown as Json } };
+    return {};
+  };
   // Kedi's text reaches pi as written: no command dispatch or template expansion.
   run.onInput(
     (texts) => texts.forEach((said) => void session.sendUserMessage(said, { deliverAs: "steer", expandPromptTemplates: false })),
     { on: "arrival" },
   );
-  run.onInterrupt(state);
+  run.onInterrupt(back);
   const stop = () => void session.abort();
   run.signal.addEventListener("abort", stop, { once: true });
   try {
@@ -411,14 +517,14 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
   const last = session.messages.filter((message): message is AssistantMessage => message.role === "assistant").at(-1);
   if (last?.stopReason === "error") throw new Error(last.errorMessage ?? "pi's model request failed");
   const said = text(last);
-  const back = params.session ? state() : {};
+  const handed = back();
   session.dispose();
-  if (!output) return { text: said, ...back };
-  if (data) return { data: data.value, ...back };
+  if (!output) return { text: said, ...handed };
+  if (data) return { data: data.value, ...handed };
   try {
-    return { data: JSON.parse(said) as Json, ...back };
+    return { data: JSON.parse(said) as Json, ...handed };
   } catch (error) {
-    return { invalid: said, error: String(error), ...back };
+    return { invalid: said, error: String(error), ...handed };
   }
 }
 
@@ -473,6 +579,7 @@ export function piBridge(options: PiBridgeOptions): Bridge {
         usage: true,
         modelFallback: true,
         sessions: true,
+        transcript: true,
         events: true,
         mediaInput: true,
         testModel: true,

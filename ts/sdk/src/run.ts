@@ -57,7 +57,7 @@ export interface ModelRequest<Reply> {
    * The conversation the request sends, for history processing: `get` it in Kedi's schema,
    * `set` what the program's processor kept. Needed when the run's `processHistory` is true.
    */
-  history?: { get(): TranscriptMessage[]; set(messages: TranscriptMessage[]): void };
+  history?: { get(): TranscriptMessage[]; set(messages: TranscriptMessage[]): void | Promise<void> };
 }
 
 export interface NativeToolCall {
@@ -142,7 +142,7 @@ export class Run {
         throw new BridgeUsageError("KB202", "the run asks for history processing; the request has no history");
       }
       const kept = await this.#ask("history/process", { runId: this.id, messages: request.history.get() as unknown as Json });
-      request.history.set(kept.messages as unknown as TranscriptMessage[]);
+      await request.history.set(kept.messages as unknown as TranscriptMessage[]);
     }
     const models = [this.params.model, ...(this.#capabilities.modelFallback ? (this.params.fallbackModels ?? []) : [])];
     let failure: unknown;

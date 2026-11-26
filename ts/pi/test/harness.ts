@@ -9,7 +9,9 @@ import { connect } from "../../sdk/src/connection.ts";
 import { type JsonObject, Peer, RpcError } from "../../sdk/src/peer.ts";
 import { piBridge } from "../pi.ts";
 
-export type Answers = Partial<Record<"approval/request" | "budget/admit" | "hook/invoke" | "artifact/admit", (params: JsonObject) => JsonObject>>;
+export type Answers = Partial<
+  Record<"approval/request" | "budget/admit" | "hook/invoke" | "artifact/admit" | "history/process" | "media/get", (params: JsonObject) => JsonObject>
+>;
 
 export interface Exchange {
   result?: JsonObject;
@@ -41,7 +43,7 @@ export async function exchange(options: {
     outcome.steps.push(`model ${params.model}`);
     return { message: { role: "assistant", ...options.model(outcome.seen) } };
   });
-  for (const method of ["approval/request", "budget/admit", "hook/invoke", "artifact/admit"] as const) {
+  for (const method of ["approval/request", "budget/admit", "hook/invoke", "artifact/admit", "history/process", "media/get"] as const) {
     kedi.onRequest(method, async (params) => {
       outcome.steps.push(method === "hook/invoke" ? String(params.event) : method === "budget/admit" ? `admit ${params.dimension}` : method);
       const answer = options.answers?.[method];
@@ -49,6 +51,8 @@ export async function exchange(options: {
       if (method === "approval/request") return { decision: "allow" };
       if (method === "budget/admit") return { admitted: true };
       if (method === "artifact/admit") return { result: params.result as never };
+      if (method === "history/process") return { messages: params.messages as never };
+      if (method === "media/get") throw new RpcError(-32602, `no media ${params.ref}`);
       return params.event === "pre_tool_use" ? { decision: "continue" } : {};
     });
   }
