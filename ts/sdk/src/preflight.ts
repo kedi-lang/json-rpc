@@ -4,17 +4,19 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { type Bridge, connect } from "./connection.ts";
 import { type Diagnostic, docs } from "./diagnostics.ts";
 import { checkHandshake } from "./handshake.ts";
+import { FIXTURES } from "./fixtures.generated.ts";
 import { type Json, type JsonObject, Peer, RpcError } from "./peer.ts";
+import { SDK_VERSION } from "./version.ts";
 
-const SDK_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const FIXTURES = resolve(SDK_ROOT, "..", "..", "fixtures", "v1");
-const SDK_VERSION = (JSON.parse(readFileSync(join(SDK_ROOT, "package.json"), "utf8")) as { version: string }).version;
+/** The SDK's sources, when it runs from them; a bundled bridge carries them in its entry. */
+const HERE = fileURLToPath(import.meta.url);
+const SDK_SOURCES = basename(HERE) === "preflight.ts" ? dirname(HERE) : undefined;
 const FIXTURE_TIMEOUT_MS = 10_000;
 
 const RUN_DEFAULTS: JsonObject = {
@@ -61,7 +63,9 @@ export interface PreflightReport {
   cached: boolean;
 }
 
-export function loadFixtures(directory = FIXTURES): Fixture[] {
+/** The conformance fixtures: the SDK's embedded copy of fixtures/v1, or those in `directory`. */
+export function loadFixtures(directory?: string): Fixture[] {
+  if (!directory) return structuredClone(FIXTURES) as unknown as Fixture[];
   return readdirSync(directory)
     .filter((name) => name.endsWith(".json"))
     .sort()
@@ -135,16 +139,17 @@ export function cacheDir(): string {
 }
 
 /**
- * What the preflight's result depends on: the bridge's package (its files and lockfile),
- * the SDK and its version, the fixtures, and the handshake.
+ * What the preflight's result depends on: the bridge's entry and package (its files and
+ * lockfile), the SDK (its version and sources), the fixtures, and the handshake.
  */
 export function fingerprint(bridge: Bridge, entry: string): string {
   const hash = createHash("sha256");
   hash.update(`sdk ${SDK_VERSION}\n`);
+  hash.update(`fixtures ${JSON.stringify(FIXTURES)}\n`);
   hash.update(`handshake ${JSON.stringify(bridge.handshake)}\n`);
   const root = packageRoot(dirname(resolve(entry)));
   const files = new Set<string>([resolve(entry)]);
-  for (const directory of [root, SDK_ROOT, FIXTURES]) {
+  for (const directory of [root, SDK_SOURCES]) {
     if (directory) for (const file of walk(directory)) files.add(file);
   }
   const lockfile = root && findUp(root, ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"]);

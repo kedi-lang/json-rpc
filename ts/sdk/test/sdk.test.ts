@@ -70,6 +70,13 @@ suite("preflight", () => {
   });
 });
 
+suite("package", () => {
+  test("the version constant matches package.json", async () => {
+    const { SDK_VERSION } = await import("../src/version.ts");
+    assert.equal(SDK_VERSION, JSON.parse(readFileSync(join(HERE, "../package.json"), "utf8")).version);
+  });
+});
+
 suite("cache", () => {
   const entry = () => {
     const directory = mkdtempSync(join(tmpdir(), "kedi-bridge-"));
