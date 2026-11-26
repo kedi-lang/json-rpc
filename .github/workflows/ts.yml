@@ -28,3 +28,28 @@ jobs:
         run: |
           python -m pip install "jsonschema==4.26.0"
           python ../../testing/fake_kedi.py --bridge "node examples/chat.ts" ../../fixtures/v1/*.json
+
+  pi:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ts/pi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: npm ci
+        working-directory: ts/sdk
+      - run: npm run check
+      - run: npm test
+      - name: The pi bridge passes its preflight
+        run: node bridge.ts --check
+      - name: The pi bridge passes the fixtures over stdio, every frame checked against the schema
+        run: |
+          python -m pip install "jsonschema==4.26.0"
+          python ../../testing/fake_kedi.py --bridge "node bridge.ts" ../../fixtures/v1/*.json

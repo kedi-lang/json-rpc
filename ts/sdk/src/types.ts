@@ -93,8 +93,11 @@ export interface RunParams {
   admitResults?: boolean;
 }
 
-/** A run's answer: text, data or content, and what the run's mode needs back. */
-export type RunAnswer = ({ text: string } | { data: Json } | { content: ContentPart[] }) & {
+/**
+ * A run's answer: text, data or content, and what the run's mode needs back. `invalid` quotes
+ * a model answer that could not be parsed, with the parse `error`: Kedi then corrects the model.
+ */
+export type RunAnswer = ({ text: string } | { data: Json } | { content: ContentPart[] } | { invalid: string; error?: string }) & {
   usage?: Usage;
   /** State mode: what the next turn's `session.state` will be. */
   state?: Json;

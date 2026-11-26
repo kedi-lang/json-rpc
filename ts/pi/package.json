@@ -1,0 +1,27 @@
+{
+  "name": "@kedi-lang/pi-bridge",
+  "version": "0.1.0",
+  "description": "A Kedi JSON-RPC bridge for the pi coding agent",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "kedi-pi-bridge": "./bridge.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "check": "tsc",
+    "preflight": "node bridge.ts --check",
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-coding-agent": "1.5.2"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  }
+}

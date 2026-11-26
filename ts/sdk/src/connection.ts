@@ -95,10 +95,11 @@ function stopped(run: Run, error: unknown): unknown {
 
 /** The answer has the one result its run asks for, and what the run's mode needs back. */
 function checkAnswer(run: Run, answer: RunAnswer): void {
-  const kinds = ["text", "data", "content"].filter((key) => key in answer);
+  const kinds = ["text", "data", "content", "invalid"].filter((key) => key in answer);
   if (kinds.length !== 1) {
-    throw new BridgeUsageError("KB210", `a run answers with one of text, data or content; this one has ${kinds.join(", ") || "none"}`);
+    throw new BridgeUsageError("KB210", `a run answers with one of text, data, content or invalid; this one has ${kinds.join(", ") || "none"}`);
   }
+  if ("invalid" in answer) return;
   if (run.params.output && !run.params.output.media && !("data" in answer)) {
     throw new BridgeUsageError("KB211", "the run has an output schema: answer with data");
   }

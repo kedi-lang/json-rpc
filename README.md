@@ -19,7 +19,7 @@ other side is `JsonRpcAdapter`; see
 | `fixtures/` | Language-neutral conformance scenarios (`v1/`) and handshakes (`handshake/`), shared with Kedi's tests and the SDKs |
 | `testing/` | A fake Kedi to test and preflight bridges against |
 | `ts/sdk/` | The TypeScript bridge SDK: `serve()`, preflight checks, diagnostics |
-| `ts/pi/` | The bridge for the [pi](https://pi.dev) coding agent |
+| `ts/pi/` | The bridge for the [pi](https://pi.dev) coding agent, on pi's TypeScript SDK |
 | `python/` | Bridges for Python harnesses |
 
 The reference bridge for OpenAI-compatible endpoints ships with Kedi

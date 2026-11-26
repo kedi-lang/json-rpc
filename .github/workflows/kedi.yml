@@ -19,7 +19,9 @@ jobs:
           repository: kedi-lang/kedi
           ref: stable
           path: kedi
-          sparse-checkout: src/kedi/agent_adapter/adapters/jsonrpc
+          sparse-checkout: |
+            src/kedi/agent_adapter/adapters/jsonrpc
+            tests/fixtures
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -29,6 +31,8 @@ jobs:
       - run: python -m pip install "jsonschema==4.26.0"
       - name: Kedi's schema copy matches its source
         run: diff -u schema/v1/protocol.json kedi/src/kedi/agent_adapter/adapters/jsonrpc/protocol.schema.json
+      - name: Kedi's handshake fixtures match their source
+        run: diff -u fixtures/handshake/v1.json kedi/tests/fixtures/jsonrpc_handshakes.json
       - name: The fixtures pass against the reference bridge
         run: >-
           python testing/fake_kedi.py

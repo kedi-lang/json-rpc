@@ -88,6 +88,7 @@ export class Run {
   #queued: PendingInput[] = [];
   #handed: PendingInput[] = [];
   #onInput: ((texts: string[]) => void) | undefined;
+  #onArrival = false;
   #snapshot: (() => JsonObject) | undefined;
 
   constructor(peer: Peer, params: RunParams, capabilities: Capabilities, testMode: boolean) {
@@ -108,10 +109,14 @@ export class Run {
 
   /**
    * Live input (`run/input`): `handler` gets each input's text as a user turn, right before
-   * the next `modelRequest` builds its request, so that request carries it.
+   * the next `modelRequest` builds its request. With `{ on: "arrival" }` it gets them as they
+   * arrive, for a harness that queues input itself (steering). Either way an input is answered
+   * delivered once a request's `describe()` carries its text.
    */
-  onInput(handler: (texts: string[]) => void): void {
+  onInput(handler: (texts: string[]) => void, options: { on?: "request" | "arrival" } = {}): void {
     this.#onInput = handler;
+    this.#onArrival = options.on === "arrival";
+    if (this.#onArrival) this.#hand();
   }
 
   /** What an interrupted attempt hands back: `{state}`, `{messages}` or `{transcript}`. */
@@ -130,9 +135,7 @@ export class Run {
       if (!this.#onInput) {
         throw new BridgeUsageError("KB201", "live input arrived, but the run has no run.onInput handler");
       }
-      const carried = this.#queued.splice(0);
-      this.#handed.push(...carried);
-      this.#onInput(carried.map((input) => input.text));
+      this.#hand();
     }
     if (this.params.processHistory) {
       if (!request.history) {
@@ -145,7 +148,7 @@ export class Run {
     let failure: unknown;
     for (const model of models) {
       if (this.#capabilities.governed) await this.admit("request");
-      for (const input of this.#handed.splice(0)) input.answer(true);
+      this.#confirmCarried(request);
       try {
         const reply = this.testMode ? await this.#testReply(request, model) : await this.#race(request.send(model, this.signal));
         // With usage, every model request is reported; counts the reply lacks stay unknown.
@@ -165,22 +168,39 @@ export class Run {
    * Returns what the model should read.
    */
   async nativeTool(call: NativeToolCall, execute: (args: JsonObject, signal: AbortSignal) => Promise<Json>): Promise<ToolOutcome> {
+    const before = await this.beforeNativeTool(call);
+    if (!before.run) return { ok: false, error: before.reason };
+    let result: Json;
+    try {
+      result = await this.#race(execute(before.arguments, this.signal));
+    } catch (error) {
+      if (this.signal.aborted) throw this.signal.reason;
+      return this.afterNativeTool(call, before.arguments, { error });
+    }
+    return this.afterNativeTool(call, before.arguments, { result });
+  }
+
+  /**
+   * The steps before a call of one of the bridge's own tools, for a harness that runs its
+   * tools itself: the `pre_tool_use` hook, approval (asked again when edited arguments are
+   * riskier), and admission. Returns the arguments to run, or why not to run it.
+   */
+  async beforeNativeTool(call: NativeToolCall): Promise<{ run: true; arguments: JsonObject } | { run: false; reason: string }> {
     if (!this.#capabilities.nativeTools) {
       throw new BridgeUsageError("KB203", `${call.name} is the bridge's own tool, but the bridge does not declare nativeTools`);
     }
-    const hooks = new Set<HookEvent>(this.params.hooks ?? []);
-    const base = { runId: this.id, callId: call.callId, tool: call.name, origin: call.origin ?? "adapter_native" };
+    const base = this.#toolBase(call);
     const riskOf = (args: JsonObject): ToolRisk =>
       typeof call.risk === "function" ? call.risk(args) : (call.risk ?? "mutating");
     let args = call.arguments;
-    if (hooks.has("pre_tool_use")) {
+    if (this.#hooks().has("pre_tool_use")) {
       const pre = await this.#ask("hook/invoke", {
         ...base,
         event: "pre_tool_use",
         arguments: args,
         ...(call.inputSchema ? { inputSchema: call.inputSchema } : {}),
       });
-      if (pre.decision === "deny") return { ok: false, error: String(pre.reason ?? "denied") };
+      if (pre.decision === "deny") return { run: false, reason: String(pre.reason ?? "denied") };
       if (pre.decision === "edit") args = pre.arguments as JsonObject;
     }
     let approved = -1;
@@ -192,28 +212,44 @@ export class Run {
         risk,
         ...(call.description ? { description: call.description } : {}),
       });
-      if (approval.decision === "deny") return { ok: false, error: String(approval.reason ?? "denied") };
+      if (approval.decision === "deny") return { run: false, reason: String(approval.reason ?? "denied") };
       approved = RISK_ORDER[risk];
       if (approval.decision === "edit") args = approval.arguments as JsonObject;
     }
     if (this.#capabilities.governed) await this.admit("toolAttempt");
-    let result: Json;
-    try {
-      result = await this.#race(execute(args, this.signal));
-    } catch (error) {
-      if (this.signal.aborted) throw this.signal.reason;
-      const message = String((error as Error)?.message ?? error);
+    return { run: true, arguments: args };
+  }
+
+  /**
+   * The steps after a call of one of the bridge's own tools: `post_tool_use` or
+   * `post_tool_use_failure`, then artifact admission. Returns what the model should read.
+   */
+  async afterNativeTool(call: NativeToolCall, args: JsonObject, outcome: { result: Json } | { error: unknown }): Promise<ToolOutcome> {
+    const base = this.#toolBase(call);
+    const hooks = this.#hooks();
+    if ("error" in outcome) {
+      const error = outcome.error as Error | undefined;
+      const message = String(error?.message ?? outcome.error);
       if (hooks.has("post_tool_use_failure")) {
-        const failure = { type: (error as Error)?.name ?? "Error", message };
+        const failure = { type: error?.name ?? "Error", message };
         await this.#ask("hook/invoke", { ...base, event: "post_tool_use_failure", arguments: args, error: failure });
       }
       return { ok: false, error: message };
     }
+    let result = outcome.result;
     if (hooks.has("post_tool_use")) {
       await this.#ask("hook/invoke", { ...base, event: "post_tool_use", arguments: args, result });
     }
     if (this.params.admitResults) result = (await this.#ask("artifact/admit", { ...base, result })).result as Json;
     return { ok: true, result };
+  }
+
+  #toolBase(call: NativeToolCall): JsonObject {
+    return { runId: this.id, callId: call.callId, tool: call.name, origin: call.origin ?? "adapter_native" };
+  }
+
+  #hooks(): Set<HookEvent> {
+    return new Set<HookEvent>(this.params.hooks ?? []);
   }
 
   /** Calls one of Kedi's tools; Kedi applies the program's hooks, approval and budgets. */
@@ -259,6 +295,7 @@ export class Run {
           },
         });
       }
+      if (this.#onArrival) this.#hand();
     });
   }
 
@@ -273,6 +310,25 @@ export class Run {
   finish(): void {
     for (const input of [...this.#queued.splice(0), ...this.#handed.splice(0)]) input.answer(false);
     if (!this.signal.aborted) this.#controller.abort(new RunStopped("cancel"));
+  }
+
+  /** Hands queued input to the run's `onInput` handler. */
+  #hand(): void {
+    if (!this.#onInput || !this.#queued.length) return;
+    const handed = this.#queued.splice(0);
+    this.#handed.push(...handed);
+    this.#onInput(handed.map((input) => input.text));
+  }
+
+  /** Answers delivered the handed input whose text the request carries. */
+  #confirmCarried<Reply>(request: ModelRequest<Reply>): void {
+    if (!this.#handed.length) return;
+    const carried = strings(request.describe());
+    this.#handed = this.#handed.filter((input) => {
+      if (!carried.some((text) => text.includes(input.text))) return true;
+      input.answer(true);
+      return false;
+    });
   }
 
   async #testReply<Reply>(request: ModelRequest<Reply>, model: string | null): Promise<Reply> {
@@ -308,4 +364,11 @@ export class Run {
   #throwIfStopped(): void {
     if (this.signal.aborted) throw this.signal.reason;
   }
+}
+
+function strings(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(strings);
+  if (value && typeof value === "object") return Object.values(value).flatMap(strings);
+  return [];
 }
