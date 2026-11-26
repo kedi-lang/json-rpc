@@ -33,6 +33,7 @@ providers' environment variables (such as `GEMINI_API_KEY`) or `~/.pi/agent/auth
 | Sessions | the session's entries are the state Kedi hands back |
 | `> mcp:` servers | pi's MCP client, with no `mcp.json` of the machine: Kedi's servers connect as `s1`, `s2`, … over stdio or streamable HTTP, their tools declared directly as `mcp__s1__<tool>`; each call takes Kedi's steps as an MCP call under the server's own tool name, its risk from the server's hints (read-only, destructive); the servers stop when the run ends |
 | Transcript, history processing | Kedi's transcript loads into the session (media by ref through `media/get`; a message Kedi did not change returns as pi wrote it, from `providerData`); with a history processor every request carries what it kept |
+| Who the requests say they come from | `User-Agent: kedi-pi/<version>`, and kedi-pi as the attribution OpenRouter, NVIDIA NIM and OpenCode take; pi's own attribution and install report are off |
 | Model-visible text is Kedi's | no discovered extensions, skills, prompt templates or context files (AGENTS.md); Kedi's system text follows pi's own prompt; Kedi's text is never run as a pi command or template |
 
 A step Kedi denies ends the run with Kedi's error, and pi makes no request after it.

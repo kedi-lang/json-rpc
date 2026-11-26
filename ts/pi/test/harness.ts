@@ -29,6 +29,8 @@ export async function exchange(options: {
   model: (seen: JsonObject[]) => JsonObject;
   run?: JsonObject;
   answers?: Answers;
+  /** false: pi's real providers answer, as named by the run's model. */
+  testModel?: boolean;
 }): Promise<Exchange> {
   const cwd = mkdtempSync(join(tmpdir(), "kedi-pi-test-"));
   writeFileSync(join(cwd, "note.txt"), "The secret word is kedi.\n");
@@ -56,7 +58,7 @@ export async function exchange(options: {
       return params.event === "pre_tool_use" ? { decision: "continue" } : {};
     });
   }
-  await kedi.request("initialize", { protocolVersion: 1, client: { name: "test" }, testModel: true });
+  await kedi.request("initialize", { protocolVersion: 1, client: { name: "test" }, testModel: options.testModel ?? true });
   const params = {
     runId: "r", callKind: "invoke", promptKind: "raw", model: "test", system: null, instructionParts: [], user: "Read note.txt.",
     userContent: null, output: null, tools: [], continuation: null, session: null, subagent: null, ...options.run,

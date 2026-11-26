@@ -23,6 +23,7 @@ import {
   type TextContent,
   type AssistantMessageEventStream,
   createAssistantMessageEventStream,
+  getAttributionHeaders,
   getCurrentSystemPrompt,
   getCurrentTools,
   type Message,
@@ -39,6 +40,20 @@ export interface PiBridgeOptions {
 
 /** Where pi would look for global resources; the bridge loads none of them. */
 const AGENT_DIR = mkdtempSync(join(tmpdir(), "kedi-pi-"));
+
+/** The bridge's version, as packages/pi/package.kedi and package.json carry it. */
+export const VERSION = "0.1.0";
+
+/**
+ * Who the bridge's model requests say they come from: kedi-pi, in place of pi, with pi's own
+ * rules for the providers that take an attribution (OpenRouter, NVIDIA NIM, OpenCode).
+ */
+export function identityHeaders(target: Pick<Model<any>, "provider" | "baseUrl">): Record<string, string> {
+  return {
+    "User-Agent": `kedi-pi/${VERSION}`,
+    ...getAttributionHeaders(target as Model<any>, { attribution: { name: "kedi-pi", url: "https://kedi-lang.org" } }),
+  };
+}
 
 /** pi's own tools and their risk for Kedi's approval. */
 const NATIVE_TOOLS: Record<string, "read_only" | "mutating" | "sensitive"> = {
@@ -407,6 +422,8 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
     // Kedi owns retries and history: pi neither retries nor compacts on its own.
     retry: { enabled: false, provider: { maxRetries: 0 } },
     compaction: { enabled: false },
+    // No install report, and no attribution to pi: requests say they come from kedi-pi.
+    enableInstallTelemetry: false,
   } as never);
   const resourceLoader = new DefaultResourceLoader({
     cwd,
@@ -481,8 +498,10 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
           const fallback = name !== null && name !== params.model;
           const target = fallback ? catalogModel(runtime, name) : requestModel;
           const { apiKey: _key, headers: _headers, ...unauthenticated } = options ?? {};
+          const given = fallback ? unauthenticated : options;
           const stream = await real(target, sent, {
-            ...(fallback ? unauthenticated : options),
+            ...given,
+            headers: { ...identityHeaders(target), ...(fallback ? {} : options?.headers) },
             ...sampling,
             signal: AbortSignal.any([signal, ...(options?.signal ? [options.signal] : [])]),
           });
