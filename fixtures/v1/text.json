@@ -1,6 +1,10 @@
 {
   "name": "text",
+  "code": "KB100",
   "description": "Kedi's prompt reaches the model and its text is the run's answer.",
+  "failure": "a text run does not answer with the model's text",
+  "help": "answer {text} with the model's reply",
+  "spec": "5-runs",
   "model": [
     {
       "parts": [

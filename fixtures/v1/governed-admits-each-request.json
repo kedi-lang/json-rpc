@@ -1,6 +1,10 @@
 {
   "name": "governed-admits-each-request",
+  "code": "KB103",
   "description": "A governed bridge asks budget/admit before every model request.",
+  "failure": "model requests are not all admitted",
+  "help": "send every model request through run.modelRequest, and turn off the harness's own retries",
+  "spec": "4-capabilities",
   "capabilities": [
     "governed",
     "tools"

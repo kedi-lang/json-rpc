@@ -256,6 +256,10 @@ def _check_expect(
         outcome.problems.append(f"run answered {answer.get('result') or answer.get('error')}, expected error {expect['error']}")
     if expect.get("failed") and "error" not in answer:
         outcome.problems.append(f"run answered {answer.get('result')}, expected it to fail")
+    data = (answer.get("error") or {}).get("data")
+    for key in expect.get("errorDataKeys", []):
+        if not isinstance(data, dict) or key not in data:
+            outcome.problems.append(f"the run's error data has no {key!r}")
     for key in expect.get("resultKeys", []):
         if key not in (answer.get("result") or {}):
             outcome.problems.append(f"the run's result has no {key!r}")
@@ -329,9 +333,11 @@ def main() -> int:
             print(f"skip  {outcome.name}: {outcome.skipped}")
         elif outcome.problems:
             failed += 1
-            print(f"FAIL  {outcome.name}")
+            fixture = json.loads(path.read_text())
+            print(f"FAIL  {outcome.name} [{fixture['code']}]: {fixture['failure']}")
             for problem in outcome.problems:
                 print(f"      {problem}")
+            print(f"      help: {fixture['help']}")
         else:
             print(f"pass  {outcome.name}")
     return 1 if failed else 0

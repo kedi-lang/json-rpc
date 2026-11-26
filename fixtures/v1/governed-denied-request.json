@@ -1,6 +1,10 @@
 {
   "name": "governed-denied-request",
+  "code": "KB104",
   "description": "A denied request never reaches the model, and the run fails.",
+  "failure": "a denied request does not end the run",
+  "help": "when budget/admit denies a request, skip it and end the run (run.modelRequest throws StepDenied)",
+  "spec": "6-steps-kedi-decides",
   "capabilities": [
     "governed",
     "tools"

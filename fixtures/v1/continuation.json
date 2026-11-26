@@ -1,6 +1,10 @@
 {
   "name": "continuation",
+  "code": "KB112",
   "description": "A continuation replays the rejected answer and Kedi's correction to the model.",
+  "failure": "a continuation does not replay the rejected answer and Kedi's correction",
+  "help": "replay run.params.continuation: its answer as the model's turn, its message as a user turn",
+  "spec": "5-runs",
   "run": {
     "continuation": {
       "answer": {

@@ -1,6 +1,10 @@
 {
   "name": "structured",
+  "code": "KB102",
   "description": "A structured run answers with data.",
+  "failure": "a structured run does not answer with data",
+  "help": "parse the model's answer against run.output.schema and answer {data}",
+  "spec": "5-runs",
   "capabilities": [
     "structuredOutput"
   ],

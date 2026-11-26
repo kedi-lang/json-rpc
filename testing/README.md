@@ -21,6 +21,7 @@ A fixture is a JSON file:
 | Field | Meaning |
 |---|---|
 | `name`, `description` | what it checks |
+| `code`, `failure`, `help`, `spec` | the diagnostic a failure reports: its stable code, what is wrong, how to fix it, and the spec section |
 | `capabilities` | what the bridge must declare for the fixture to run |
 | `run` | `run` params; the fake Kedi fills in the rest (`user` defaults to `Hello.`) |
 | `model` | the test model's replies, in order: assistant messages in Kedi's transcript schema (`{"parts": [...]}`); `done` once they run out |
@@ -35,6 +36,7 @@ A fixture is a JSON file:
 | `error` | the run answered an error containing these fields (`{"code": -32006}`) |
 | `failed` | the run answered an error |
 | `resultKeys` | the result has these fields |
+| `errorDataKeys` | the run's error `data` has these fields |
 | `modelRequests` | the bridge sent this many model requests |
 | `modelSaw` | model request N carried a string containing this text |
 | `order` | the bridge's requests include these methods in this order |

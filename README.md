@@ -16,7 +16,7 @@ other side is `JsonRpcAdapter`; see
 |---|---|
 | `spec/` | The protocol, versioned, with its changelog |
 | `schema/` | JSON Schema for every message; the TypeScript and Rust types are generated from it |
-| `fixtures/` | Language-neutral conformance scenarios, shared with `kedi adapter check` |
+| `fixtures/` | Language-neutral conformance scenarios (`v1/`) and handshakes (`handshake/`), shared with Kedi's tests and the SDKs |
 | `testing/` | A fake Kedi to test and preflight bridges against |
 | `ts/sdk/` | The TypeScript bridge SDK: `serve()`, preflight checks, diagnostics |
 | `ts/pi/` | The bridge for the [pi](https://pi.dev) coding agent |

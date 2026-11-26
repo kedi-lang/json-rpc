@@ -1,6 +1,10 @@
 {
   "name": "live-input",
+  "code": "KB106",
   "description": "Input sent while the run runs reaches the next model request, and is acknowledged delivered.",
+  "failure": "live input does not reach the next model request",
+  "help": "register run.onInput and add each text as a user turn; run.modelRequest answers it delivered",
+  "spec": "8-children-and-live-input",
   "capabilities": [
     "liveInput",
     "tools"
