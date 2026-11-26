@@ -33,6 +33,22 @@ test("the user turn keeps its images where Kedi put them", async () => {
   );
 });
 
+test("a turn whose image pi cannot send fails before any request", async () => {
+  const { seen, error } = await exchange({
+    model: done,
+    run: {
+      user: "Look at photo.",
+      userContent: [
+        { type: "text", text: "Look at " },
+        { type: "media", name: "photo", kind: "image", mediaType: "image/png", data: Buffer.from("not an image").toString("base64") },
+        { type: "text", text: "." },
+      ],
+    },
+  });
+  assert.equal(seen.length, 0);
+  assert.match(String(error?.message), /pi could not send the turn's images: \[Image omitted/);
+});
+
 test("an image by URL is fetched for pi, which takes base64", async () => {
   const server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "image/png" });

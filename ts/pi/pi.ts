@@ -70,7 +70,8 @@ const TEST_MODEL: Model<"openai-completions"> = {
   provider: "openai",
   baseUrl: "http://127.0.0.1:9/v1",
   reasoning: false,
-  input: ["text"],
+  // Kedi's test model takes what a run sends; pi would strip images for a text-only model.
+  input: ["text", "image"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
   maxTokens: 8_192,
@@ -317,17 +318,26 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
     // promises that every model request is admitted, so pi does not warm.
     pi.on("cache_warming_decision", () => ({ action: "stop" as const }));
     if (Array.isArray(turn)) {
-      // pi sends a user turn as its text, then its images; Kedi put each image where its
-      // label is. Every request of the run carries the turn in Kedi's order.
+      // pi sends a user turn as its text, then its images as pi prepared them (converted, or
+      // resized to the model's limits), with a note for each it had to omit. Kedi put each
+      // image where its label is: every request carries Kedi's text in Kedi's order, with
+      // pi's images, and a turn whose image pi omitted fails rather than reaching the model
+      // without it.
       const flattened = turn.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+      const wanted = turn.filter((part) => part.type === "image").length;
       pi.on("context", async (event) => {
         let restored = false;
         const messages = event.messages.map((message) => {
           if (restored || message.role !== "user" || !Array.isArray(message.content)) return message;
           const said = message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
-          if (said !== flattened) return message;
+          if (said !== flattened && !said.startsWith(`${flattened}\n\n`)) return message;
           restored = true;
-          return { ...message, content: turn };
+          const images = message.content.filter((part): part is ImageContent => part.type === "image");
+          if (images.length < wanted) {
+            failure ??= new Error(`pi could not send the turn's images: ${said.slice(flattened.length).trim()}`);
+            return message;
+          }
+          return { ...message, content: turn.map((part) => (part.type === "image" ? images.shift()! : part)) };
         });
         return restored ? { messages } : undefined;
       });

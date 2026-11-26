@@ -15,7 +15,7 @@
     "check": "tsc",
     "preflight": "node bridge.ts --check",
     "test": "node --test test/*.test.ts",
-    "build": "esbuild bridge.ts --bundle --platform=node --format=esm --target=node22 --minify-whitespace --minify-syntax --legal-comments=none --metafile=dist/meta.json --outfile=dist/bridge.mjs \"--banner:js=import { createRequire as __kediRequire } from 'node:module'; const require = __kediRequire(import.meta.url);\" && node scripts/notices.ts dist/meta.json > dist/THIRD_PARTY_LICENSES.txt"
+    "build": "esbuild bridge.ts --bundle --platform=node --format=esm --target=node22 --minify-whitespace --minify-syntax --legal-comments=none --metafile=dist/meta.json --outfile=dist/bridge.mjs \"--banner:js=import { createRequire as __kediRequire } from 'node:module'; import { fileURLToPath as __kediPath } from 'node:url'; import { dirname as __kediDirname } from 'node:path'; const require = __kediRequire(import.meta.url); const __filename = __kediPath(import.meta.url); const __dirname = __kediDirname(__filename);\" && cp node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm dist/ && node scripts/notices.ts dist/meta.json > dist/THIRD_PARTY_LICENSES.txt"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.5.2",

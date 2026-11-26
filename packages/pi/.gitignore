@@ -1,2 +1,3 @@
 src/pi/bridge.mjs
+src/pi/photon_rs_bg.wasm
 src/pi/THIRD_PARTY_LICENSES.txt

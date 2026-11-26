@@ -40,15 +40,15 @@ jobs:
       - name: The bundle runs alone, with only Node
         run: |
           lone="$(mktemp -d)"
-          cp ts/pi/dist/bridge.mjs "$lone/"
+          cp ts/pi/dist/bridge.mjs ts/pi/dist/photon_rs_bg.wasm "$lone/"
           node "$lone/bridge.mjs" --check
       - name: Tag the release commit
         run: |
-          cp ts/pi/dist/bridge.mjs ts/pi/dist/THIRD_PARTY_LICENSES.txt packages/pi/src/pi/
+          cp ts/pi/dist/bridge.mjs ts/pi/dist/photon_rs_bg.wasm ts/pi/dist/THIRD_PARTY_LICENSES.txt packages/pi/src/pi/
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout --detach
-          git add -f packages/pi/src/pi/bridge.mjs packages/pi/src/pi/THIRD_PARTY_LICENSES.txt
+          git add -f packages/pi/src/pi/bridge.mjs packages/pi/src/pi/photon_rs_bg.wasm packages/pi/src/pi/THIRD_PARTY_LICENSES.txt
           git commit -q -m "pi $VERSION: the bundled bridge"
           git tag -a "pi-v$VERSION" -m "pi $VERSION"
           git push origin "pi-v$VERSION"

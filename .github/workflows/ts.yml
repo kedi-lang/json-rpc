@@ -55,7 +55,7 @@ jobs:
         run: |
           npm run build
           lone="$(mktemp -d)"
-          cp dist/bridge.mjs "$lone/"
+          cp dist/bridge.mjs dist/photon_rs_bg.wasm "$lone/"
           node "$lone/bridge.mjs" --check
       - name: The pi bridge passes the fixtures over stdio, every frame checked against the schema
         run: |

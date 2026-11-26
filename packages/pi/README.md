@@ -18,11 +18,12 @@ It needs Node 22.18 or newer and a Kedi with package adapters (kedi-lang/kedi#23
 
 `bridge.mjs`, the bridge bundled with the SDK and pi (about 10 MB), is not on `main`: the
 [pi release workflow](../../.github/workflows/pi-release.yml) builds it, checks it alone, and
-adds it with `THIRD_PARTY_LICENSES.txt` to a release commit tagged `pi-v<version>`. Install
+adds it with `photon_rs_bg.wasm` (pi's image converter) and `THIRD_PARTY_LICENSES.txt` to a
+release commit tagged `pi-v<version>`. Install
 that commit, or build it yourself:
 
 ```sh
 (cd ../../ts/pi && npm ci && npm run build)
-cp ../../ts/pi/dist/bridge.mjs ../../ts/pi/dist/THIRD_PARTY_LICENSES.txt src/pi/
+cp ../../ts/pi/dist/{bridge.mjs,photon_rs_bg.wasm,THIRD_PARTY_LICENSES.txt} src/pi/
 kedi install package.kedi
 ```

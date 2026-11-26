@@ -51,6 +51,7 @@ python ../../testing/fake_kedi.py --bridge "node bridge.ts" ../../fixtures/v1/*.
 
 `npm run build` bundles the bridge, the SDK and pi into one file, `dist/bridge.mjs`
 (about 10 MB), that needs only Node 22.18 or newer: `node dist/bridge.mjs` serves Kedi
-with no `node_modules`. The bundle carries the conformance fixtures, so its preflight runs
+with no `node_modules`. Beside it goes `dist/photon_rs_bg.wasm`, with which pi converts and
+resizes images; without it a turn's image cannot be sent, and the run fails saying so. The bundle carries the conformance fixtures, so its preflight runs
 wherever it is copied.
 
