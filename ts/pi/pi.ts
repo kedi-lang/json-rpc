@@ -42,7 +42,7 @@ export interface PiBridgeOptions {
 const AGENT_DIR = mkdtempSync(join(tmpdir(), "kedi-pi-"));
 
 /** The bridge's version, as packages/pi/package.kedi and package.json carry it. */
-export const VERSION = "0.1.0";
+export const VERSION = "0.1.1";
 
 /**
  * Who the bridge's model requests say they come from: kedi-pi, in place of pi, with pi's own

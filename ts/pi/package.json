@@ -1,6 +1,6 @@
 {
   "name": "@kedi-lang/pi-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A Kedi JSON-RPC bridge for the pi coding agent",
   "private": true,
   "type": "module",
