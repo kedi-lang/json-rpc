@@ -25,6 +25,8 @@ providers' environment variables (such as `GEMINI_API_KEY`) or `~/.pi/agent/auth
 | Structured output (`nativeStructuredOutput`) | a pi tool named after the output, whose arguments are the answer; a JSON text answer is accepted too |
 | Live input, interrupts | steering messages, `session.abort()` |
 | `> effort:` | pi's thinking level (`minimal` to `max`), clamped to the model |
+| `> fallback:` | each fallback model tried in turn, each request admitted; pi resolves the fallback's credentials |
+| Every model request governed | pi's prompt cache warming, which would send requests past Kedi, is off |
 | `> settings:` | `temperature` and `max_tokens`, which every pi provider applies alike; Kedi refuses other names |
 | Media input | images, base64 or fetched from their URL; each request carries the user turn in Kedi's order (pi itself sends text, then images) |
 | Events | `message.delta` as the model streams, `message.completed` with `commentary` beside tool calls and `final` for the answer |
@@ -50,4 +52,4 @@ python ../../testing/fake_kedi.py --bridge "node bridge.ts" ../../fixtures/v1/*.
 with no `node_modules`. The bundle carries the conformance fixtures, so its preflight runs
 wherever it is copied.
 
-Not yet: transcript mode, MCP servers, model fallback.
+Not yet: transcript mode, MCP servers.

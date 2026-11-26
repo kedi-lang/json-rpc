@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { test } from "node:test";
-import type { JsonObject } from "../../sdk/src/peer.ts";
+import { type JsonObject, RpcError } from "../../sdk/src/peer.ts";
 import { streamSettings } from "../pi.ts";
 import { exchange, readsTheNote } from "./harness.ts";
 
@@ -78,4 +78,16 @@ test("text beside a tool call is commentary; the answer is final", async () => {
 test("temperature and max_tokens reach pi's request options; nothing else does", () => {
   assert.deepEqual(streamSettings({ temperature: 0.2, max_tokens: 64, top_p: 0.9 }), { temperature: 0.2, maxTokens: 64 });
   assert.deepEqual(streamSettings(undefined), {});
+});
+
+test("a failed request is tried on each fallback model, each admitted", async () => {
+  const { steps, result } = await exchange({
+    model: (seen) => {
+      if (seen.at(-1)!.model === "primary") throw new RpcError(-32002, "primary is down");
+      return done();
+    },
+    run: { model: "primary", fallbackModels: ["backup"] },
+  });
+  assert.deepEqual(steps, ["admit request", "model primary", "admit request", "model backup"]);
+  assert.equal(result?.text, "done");
 });

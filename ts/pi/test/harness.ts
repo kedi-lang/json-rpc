@@ -38,7 +38,7 @@ export async function exchange(options: {
   kedi.onNotification("run/event", (params) => outcome.events.push(params));
   kedi.onRequest("model/complete", async (params) => {
     outcome.seen.push(params);
-    outcome.steps.push("model");
+    outcome.steps.push(`model ${params.model}`);
     return { message: { role: "assistant", ...options.model(outcome.seen) } };
   });
   for (const method of ["approval/request", "budget/admit", "hook/invoke", "artifact/admit"] as const) {

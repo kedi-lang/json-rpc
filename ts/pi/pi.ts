@@ -66,6 +66,16 @@ const TEST_MODEL: Model<"openai-completions"> = {
 
 let realRuntime: Promise<ModelRuntime> | undefined;
 
+/** A model of pi's catalog named provider/model, as Kedi's > model: and > fallback: name them. */
+function catalogModel(runtime: ModelRuntime, name: string): Model<any> {
+  const slash = name.indexOf("/");
+  const model = slash > 0 ? runtime.getModel(name.slice(0, slash), name.slice(slash + 1)) : undefined;
+  if (!model) {
+    throw new RpcError(-32002, `pi has no model ${JSON.stringify(name)}: name one as provider/model, such as google/gemini-2.5-flash`);
+  }
+  return model;
+}
+
 async function modelFor(run: Run): Promise<{ runtime: ModelRuntime; model: Model<any> }> {
   if (run.testMode) {
     const runtime = await ModelRuntime.create({ authPath: join(AGENT_DIR, "auth.json"), modelsPath: null, allowModelNetwork: false });
@@ -75,13 +85,7 @@ async function modelFor(run: Run): Promise<{ runtime: ModelRuntime; model: Model
   // pi's own credentials and model catalog: ~/.pi/agent, and the providers' environment variables.
   realRuntime ??= ModelRuntime.create();
   const runtime = await realRuntime;
-  const name = run.params.model ?? "";
-  const slash = name.indexOf("/");
-  const model = slash > 0 ? runtime.getModel(name.slice(0, slash), name.slice(slash + 1)) : undefined;
-  if (!model) {
-    throw new RpcError(-32002, `pi has no model ${JSON.stringify(name)}: name one as provider/model, such as google/gemini-2.5-flash`);
-  }
-  return { runtime, model };
+  return { runtime, model: catalogModel(runtime, run.params.model ?? "") };
 }
 
 // pi's transcript to Kedi's, and an assistant message back.
@@ -224,6 +228,9 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
 
   const turn = params.continuation ? params.continuation.message : await userTurn(params, run.signal);
   const kedi = (pi: ExtensionAPI) => {
+    // Cache warming sends requests of its own, past the stream function Kedi admits; governed
+    // promises that every model request is admitted, so pi does not warm.
+    pi.on("cache_warming_decision", () => ({ action: "stop" as const }));
     if (Array.isArray(turn)) {
       // pi sends a user turn as its text, then its images; Kedi put each image where its
       // label is. Every request of the run carries the turn in Kedi's order.
@@ -338,9 +345,13 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
     if (failure !== undefined) return replay(failed(requestModel, failure, true));
     const answered = run
       .modelRequest<AssistantMessage>({
-        async send(_model, signal) {
-          const stream = await real(requestModel, context, {
-            ...options,
+        async send(name, signal) {
+          // A fallback model is pi's to resolve, and its provider's credentials with it.
+          const fallback = name !== null && name !== params.model;
+          const target = fallback ? catalogModel(runtime, name) : requestModel;
+          const { apiKey: _key, headers: _headers, ...unauthenticated } = options ?? {};
+          const stream = await real(target, context, {
+            ...(fallback ? unauthenticated : options),
             ...sampling,
             signal: AbortSignal.any([signal, ...(options?.signal ? [options.signal] : [])]),
           });
@@ -349,7 +360,10 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
           for await (const event of stream) {
             if (event.type === "text_delta") run.event("message.delta", { messageId, text: event.delta });
           }
-          return stream.result();
+          const message = await stream.result();
+          // pi reports a failed request as a message; it fails here so the next model is tried.
+          if (message.stopReason === "error") throw new Error(message.errorMessage ?? `${target.provider}/${target.id} failed`);
+          return message;
         },
         describe: () => describe(context),
         reply: (message) => fromKedi(message, requestModel),
@@ -457,6 +471,7 @@ export function piBridge(options: PiBridgeOptions): Bridge {
         liveInput: true,
         interrupt: true,
         usage: true,
+        modelFallback: true,
         sessions: true,
         events: true,
         mediaInput: true,

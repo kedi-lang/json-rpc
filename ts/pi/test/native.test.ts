@@ -21,9 +21,9 @@ test("a pi tool call takes the hooks, approval, admission and artifact admission
     { hooks: ["pre_tool_use", "post_tool_use"], admitResults: true },
   );
   assert.deepEqual(steps, [
-    "admit request", "model",
+    "admit request", "model test",
     "pre_tool_use", "approval/request", "admit toolAttempt", "post_tool_use", "artifact/admit",
-    "admit request", "model",
+    "admit request", "model test",
   ]);
   assert.equal(approvals[0]!.risk, "read_only");
   assert.equal(approvals[0]!.origin, "adapter_native");
@@ -52,5 +52,5 @@ test("a tool attempt Kedi does not admit ends the run with Kedi's error", async 
   assert.ok(error instanceof RpcError, "the run should fail");
   assert.equal(error.code, -32002);
   assert.match(error.message, /tool budget exhausted/);
-  assert.equal(steps.filter((step) => step === "model").length, 1, steps.join(", "));
+  assert.equal(steps.filter((step) => step.startsWith("model")).length, 1, steps.join(", "));
 });
