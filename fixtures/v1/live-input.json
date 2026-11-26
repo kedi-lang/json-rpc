@@ -1,0 +1,88 @@
+{
+  "name": "live-input",
+  "description": "Input sent while the run runs reaches the next model request, and is acknowledged delivered.",
+  "capabilities": [
+    "liveInput",
+    "tools"
+  ],
+  "run": {
+    "tools": [
+      {
+        "name": "lookup",
+        "description": "Look up a city's country.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ]
+        },
+        "outputSchema": null,
+        "requiredBeforeOutput": false
+      }
+    ]
+  },
+  "onModelRequest": {
+    "1": [
+      {
+        "send": "run/input",
+        "items": [
+          {
+            "id": "i1",
+            "text": "Use the blue one."
+          }
+        ]
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "toolCall",
+          "id": "t1",
+          "name": "lookup",
+          "arguments": {
+            "city": "Lyon"
+          }
+        }
+      ]
+    },
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Blue it is."
+        }
+      ]
+    }
+  ],
+  "tools": {
+    "lookup": {
+      "result": "France"
+    }
+  },
+  "expect": {
+    "result": {
+      "text": "Blue it is."
+    },
+    "modelSaw": [
+      {
+        "request": 2,
+        "contains": "Use the blue one."
+      }
+    ],
+    "answers": [
+      {
+        "method": "run/input",
+        "result": {
+          "delivered": true
+        }
+      }
+    ]
+  }
+}

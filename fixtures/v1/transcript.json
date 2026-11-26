@@ -1,0 +1,56 @@
+{
+  "name": "transcript",
+  "description": "Kedi's transcript reaches the model; the turn's messages come back.",
+  "capabilities": [
+    "transcript"
+  ],
+  "run": {
+    "user": "What is my name?",
+    "history": [
+      {
+        "id": "m1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "My name is Ada."
+          }
+        ]
+      },
+      {
+        "id": "m2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Hello, Ada."
+          }
+        ]
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Ada."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "result": {
+      "text": "Ada."
+    },
+    "resultKeys": [
+      "messages"
+    ],
+    "modelSaw": [
+      {
+        "request": 1,
+        "contains": "My name is Ada."
+      }
+    ]
+  }
+}

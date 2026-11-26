@@ -1,0 +1,29 @@
+{
+  "name": "interrupt",
+  "description": "run/interrupt stops the attempt: the run answers -32006.",
+  "capabilities": [
+    "interrupt"
+  ],
+  "onModelRequest": {
+    "1": [
+      {
+        "send": "run/interrupt"
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Too late."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "error": {
+      "code": -32006
+    }
+  }
+}

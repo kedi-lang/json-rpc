@@ -1,0 +1,28 @@
+{
+  "name": "line-separators",
+  "description": "U+2028, U+2029 and CR stay inside one frame.",
+  "run": {
+    "user": "one two three\rfour"
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Read."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "result": {
+      "text": "Read."
+    },
+    "modelSaw": [
+      {
+        "request": 1,
+        "contains": "one two three\rfour"
+      }
+    ]
+  }
+}

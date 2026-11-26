@@ -1,0 +1,42 @@
+{
+  "name": "structured",
+  "description": "A structured run answers with data.",
+  "capabilities": [
+    "structuredOutput"
+  ],
+  "run": {
+    "callKind": "produce",
+    "output": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "capital": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "capital"
+        ]
+      },
+      "toolName": "final_result"
+    }
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "{\"capital\": \"Ankara\"}"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "result": {
+      "data": {
+        "capital": "Ankara"
+      }
+    },
+    "modelRequests": 1
+  }
+}

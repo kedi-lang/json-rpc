@@ -1,0 +1,28 @@
+{
+  "name": "usage",
+  "description": "With usage, one run/usage per model request.",
+  "capabilities": [
+    "usage"
+  ],
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Counted."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "result": {
+      "text": "Counted."
+    },
+    "count": [
+      {
+        "method": "run/usage",
+        "times": 1
+      }
+    ]
+  }
+}

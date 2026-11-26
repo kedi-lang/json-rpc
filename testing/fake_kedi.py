@@ -1,0 +1,341 @@
+"""A fake Kedi: runs conformance fixtures against a bridge.
+
+Usage::
+
+    python testing/fake_kedi.py --bridge "node my_bridge.mjs" fixtures/*.json
+
+The bridge runs in test mode (``testModel``): every model request comes to the fake Kedi as
+``model/complete``, answered from the fixture's ``model`` script, so no model endpoint is
+needed. Every frame, both directions, is checked against ``schema/v1/protocol.json``; then
+the fixture's ``expect`` is checked. A fixture whose ``capabilities`` the bridge lacks is
+skipped, and reported as skipped.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shlex
+import subprocess
+import sys
+import threading
+from dataclasses import dataclass, field
+from pathlib import Path
+from queue import Empty, Queue
+from typing import Any
+
+from jsonschema import Draft202012Validator
+from referencing import Registry, Resource
+
+ROOT = Path(__file__).parents[1]
+SCHEMA = json.loads((ROOT / "schema" / "v1" / "protocol.json").read_text())
+REGISTRY = Registry().with_resource(SCHEMA["$id"], Resource.from_contents(SCHEMA))
+TIMEOUT = 20.0
+
+RUN_DEFAULTS: dict[str, Any] = {
+    "callKind": "invoke",
+    "promptKind": "raw",
+    "model": "test",
+    "fallbackModels": [],
+    "settings": {},
+    "effort": None,
+    "system": "You are being tested.",
+    "instructionParts": [],
+    "userContent": None,
+    "output": None,
+    "tools": [],
+    "continuation": None,
+    "session": None,
+    "subagent": None,
+    "hooks": [],
+    "mcpServers": [],
+    "admitResults": False,
+}
+
+
+def _validate(ref: str, value: Any) -> list[str]:
+    validator = Draft202012Validator({"$ref": f"{SCHEMA['$id']}{ref}"}, registry=REGISTRY)
+    errors = sorted(validator.iter_errors(value), key=lambda error: list(error.path))
+    return [f"{error.message} at {list(error.path)}" for error in errors[:3]]
+
+
+@dataclass
+class Outcome:
+    """What running one fixture found."""
+
+    name: str
+    skipped: str | None = None
+    problems: list[str] = field(default_factory=list)
+
+
+class Bridge:
+    """A bridge process and the frames it exchanged with the fake Kedi."""
+
+    def __init__(self, command: list[str]) -> None:
+        self.process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.inbox: Queue[dict[str, Any]] = Queue()
+        self.frames: list[tuple[str, dict[str, Any]]] = []
+        self.stderr: list[str] = []
+        self.next_id = 1
+        threading.Thread(target=self._read, daemon=True).start()
+        threading.Thread(target=self._drain, daemon=True).start()
+
+    def _read(self) -> None:
+        assert self.process.stdout is not None
+        descriptor = self.process.stdout.fileno()
+        buffered = b""
+        while chunk := os.read(descriptor, 65536):
+            buffered += chunk
+            while b"\n" in buffered:
+                line, buffered = buffered.split(b"\n", 1)
+                if line.strip():
+                    message = json.loads(line)
+                    self.frames.append(("bridge", message))
+                    self.inbox.put(message)
+
+    def _drain(self) -> None:
+        assert self.process.stderr is not None
+        for line in self.process.stderr:
+            self.stderr.append(line.decode("utf-8", "replace").rstrip())
+
+    def send(self, message: dict[str, Any]) -> None:
+        message = {"jsonrpc": "2.0", **message}
+        self.frames.append(("kedi", message))
+        assert self.process.stdin is not None
+        frame = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+        self.process.stdin.write(frame.encode() + b"\n")
+        self.process.stdin.flush()
+
+    def request(self, method: str, params: dict[str, Any]) -> int:
+        request_id = self.next_id
+        self.next_id += 1
+        self.send({"id": request_id, "method": method, "params": params})
+        return request_id
+
+    def receive(self) -> dict[str, Any]:
+        try:
+            return self.inbox.get(timeout=TIMEOUT)
+        except Empty as exc:
+            tail = "\n  ".join(self.stderr[-5:])
+            raise TimeoutError(f"the bridge sent nothing for {TIMEOUT:.0f}s\n  {tail}") from exc
+
+    def close(self) -> None:
+        if self.process.poll() is None:
+            self.process.kill()
+        self.process.wait(timeout=5)
+
+
+def run_fixture(command: list[str], fixture: dict[str, Any]) -> Outcome:
+    outcome = Outcome(fixture["name"])
+    bridge = Bridge(command)
+    try:
+        _exercise(bridge, fixture, outcome)
+    except (TimeoutError, KeyError, ValueError) as exc:
+        outcome.problems.append(f"{type(exc).__name__}: {exc}")
+    finally:
+        bridge.close()
+    if outcome.skipped is None:
+        outcome.problems += _schema_problems(bridge.frames)
+    return outcome
+
+
+def _exercise(bridge: Bridge, fixture: dict[str, Any], outcome: Outcome) -> None:
+    hello = bridge.request(
+        "initialize", {"protocolVersion": 1, "client": {"name": "fake-kedi"}, "testModel": True}
+    )
+    handshake = _answer_to(bridge, hello)
+    capabilities = handshake["result"]["capabilities"]
+    missing = [name for name in fixture.get("capabilities", []) if not capabilities.get(name)]
+    if not capabilities.get("testModel"):
+        missing.insert(0, "testModel")
+    if missing:
+        outcome.skipped = f"the bridge lacks {', '.join(missing)}"
+        return
+    params = {**RUN_DEFAULTS, **fixture.get("run", {}), "runId": "run-1"}
+    params.setdefault("user", "Hello.")
+    run_id = bridge.request("run", params)
+    script = list(fixture.get("model", []))
+    actions = {int(index): steps for index, steps in fixture.get("onModelRequest", {}).items()}
+    budget = dict(fixture.get("budget", {}))
+    tools = fixture.get("tools", {})
+    seen: list[dict[str, Any]] = []
+    while True:
+        message = bridge.receive()
+        method = message.get("method")
+        if method is None:
+            if message.get("id") == run_id:
+                _check_expect(fixture.get("expect", {}), message, seen, bridge.frames, outcome)
+                return
+            continue
+        if method == "model/complete":
+            seen.append(message["params"])
+            for action in actions.get(len(seen), []):
+                _act(bridge, action, run_id)
+            reply = script.pop(0) if script else {"parts": [{"type": "text", "text": "done"}]}
+            bridge.send({"id": message["id"], "result": {"message": {"role": "assistant", **reply}}})
+        elif method == "budget/admit":
+            dimension = message["params"]["dimension"]
+            left = budget.get(dimension)
+            if left is not None and left <= 0:
+                denial = {"admitted": False, "dimension": dimension, "reason": "budget exhausted"}
+                bridge.send({"id": message["id"], "result": denial})
+                bridge.send({"method": "run/cancel", "params": {"runId": "run-1"}})
+            else:
+                if left is not None:
+                    budget[dimension] = left - 1
+                bridge.send({"id": message["id"], "result": {"admitted": True}})
+        elif method == "tool/call":
+            answer = tools.get(message["params"]["name"], {"error": "unknown tool"})
+            result = {"ok": True, "result": answer["result"]} if "result" in answer else {
+                "ok": False,
+                "error": answer["error"],
+            }
+            bridge.send({"id": message["id"], "result": result})
+        elif method == "run/input" or "id" not in message:
+            continue  # notifications (run/usage, run/event) are only recorded
+        else:
+            error = {"code": -32601, "message": f"the fake Kedi does not answer {method}"}
+            bridge.send({"id": message["id"], "error": error})
+
+
+def _act(bridge: Bridge, action: dict[str, Any], run_id: int) -> None:
+    del run_id
+    method = action["send"]
+    params = {"runId": "run-1", **{key: value for key, value in action.items() if key != "send"}}
+    if method == "run/input":
+        bridge.request(method, params)
+    else:
+        bridge.send({"method": method, "params": params})
+
+
+def _answer_to(bridge: Bridge, request_id: int) -> dict[str, Any]:
+    while True:
+        message = bridge.receive()
+        if message.get("id") == request_id and "method" not in message:
+            return message
+
+
+def _strings(value: Any) -> list[str]:
+    """Every string inside ``value``."""
+
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _strings(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in _strings(item)]
+    return []
+
+
+def _contains(actual: Any, expected: Any) -> bool:
+    """Whether ``actual`` holds everything ``expected`` names (objects partially, the rest equal)."""
+
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(
+            key in actual and _contains(actual[key], value) for key, value in expected.items()
+        )
+    return actual == expected
+
+
+def _check_expect(
+    expect: dict[str, Any],
+    answer: dict[str, Any],
+    seen: list[dict[str, Any]],
+    frames: list[tuple[str, dict[str, Any]]],
+    outcome: Outcome,
+) -> None:
+    if "result" in expect and not _contains(answer.get("result"), expect["result"]):
+        outcome.problems.append(f"run answered {answer.get('result') or answer.get('error')}, expected {expect['result']}")
+    if "error" in expect and not _contains(answer.get("error"), expect["error"]):
+        outcome.problems.append(f"run answered {answer.get('result') or answer.get('error')}, expected error {expect['error']}")
+    if expect.get("failed") and "error" not in answer:
+        outcome.problems.append(f"run answered {answer.get('result')}, expected it to fail")
+    for key in expect.get("resultKeys", []):
+        if key not in (answer.get("result") or {}):
+            outcome.problems.append(f"the run's result has no {key!r}")
+    for expected in expect.get("answers", []):
+        asked = {frame["id"] for side, frame in frames if side == "kedi" and frame.get("method") == expected["method"]}
+        replies = [frame for side, frame in frames if side == "bridge" and frame.get("id") in asked and "method" not in frame]
+        if not any(_contains(reply.get("result"), expected["result"]) for reply in replies):
+            outcome.problems.append(f"no {expected['method']} answer held {expected['result']}")
+    if "modelRequests" in expect and len(seen) != expect["modelRequests"]:
+        outcome.problems.append(f"{len(seen)} model requests, expected {expect['modelRequests']}")
+    for check in expect.get("modelSaw", []):
+        request = seen[check["request"] - 1] if len(seen) >= check["request"] else None
+        if not any(check["contains"] in text for text in _strings(request)):
+            outcome.problems.append(f"model request {check['request']} did not carry {check['contains']!r}")
+    order = expect.get("order")
+    if order:
+        methods = [frame.get("method") for side, frame in frames if side == "bridge" and frame.get("method")]
+        position = 0
+        for method in methods:
+            if position < len(order) and method == order[position]:
+                position += 1
+        if position < len(order):
+            outcome.problems.append(f"the bridge's requests {methods} do not follow {order}")
+    for counted in expect.get("count", []):
+        number = sum(
+            1 for side, frame in frames if side == "bridge" and frame.get("method") == counted["method"]
+        )
+        if number != counted["times"]:
+            outcome.problems.append(f"{counted['method']} sent {number} times, expected {counted['times']}")
+
+
+def _schema_problems(frames: list[tuple[str, dict[str, Any]]]) -> list[str]:
+    """Each frame that does not match its method's schema."""
+
+    methods = SCHEMA["methods"]
+    asked: dict[tuple[str, Any], str] = {}
+    found: list[str] = []
+    for side, frame in frames:
+        method = frame.get("method")
+        if method is not None:
+            definition = methods.get(method)
+            if definition is None:
+                found.append(f"{side} sent {method}: not a protocol method")
+                continue
+            if not definition["direction"].startswith(side):
+                found.append(f"{side} sent {method}: it goes the other way")
+            if "id" in frame:
+                asked[(side, frame["id"])] = method
+            found += [f"{method} params: {problem}" for problem in _validate(definition["params"], frame.get("params", {}))]
+            continue
+        asker = "kedi" if side == "bridge" else "bridge"
+        method = asked.pop((asker, frame.get("id")), None)
+        if method is None or "error" in frame:
+            continue
+        result = methods[method].get("result")
+        if result is not None:
+            found += [f"{method} result: {problem}" for problem in _validate(result, frame.get("result"))]
+    return found
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run conformance fixtures against a bridge.")
+    parser.add_argument("--bridge", required=True, help="the command that starts the bridge")
+    parser.add_argument("fixtures", nargs="+", type=Path)
+    args = parser.parse_args()
+    command = shlex.split(args.bridge)
+    failed = 0
+    for path in args.fixtures:
+        outcome = run_fixture(command, json.loads(path.read_text()))
+        if outcome.skipped:
+            print(f"skip  {outcome.name}: {outcome.skipped}")
+        elif outcome.problems:
+            failed += 1
+            print(f"FAIL  {outcome.name}")
+            for problem in outcome.problems:
+                print(f"      {problem}")
+        else:
+            print(f"pass  {outcome.name}")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

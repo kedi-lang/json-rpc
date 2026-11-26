@@ -1,0 +1,26 @@
+{
+  "name": "cancel",
+  "description": "run/cancel stops the run: it answers -32003.",
+  "onModelRequest": {
+    "1": [
+      {
+        "send": "run/cancel"
+      }
+    ]
+  },
+  "model": [
+    {
+      "parts": [
+        {
+          "type": "text",
+          "text": "Too late."
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "error": {
+      "code": -32003
+    }
+  }
+}
