@@ -31,6 +31,7 @@ providers' environment variables (such as `GEMINI_API_KEY`) or `~/.pi/agent/auth
 | Media input | images, base64 or fetched from their URL; each request carries the user turn in Kedi's order (pi itself sends text, then images) |
 | Events | `message.delta` as the model streams, `message.completed` with `commentary` beside tool calls and `final` for the answer |
 | Sessions | the session's entries are the state Kedi hands back |
+| `> mcp:` servers | pi's MCP client, with no `mcp.json` of the machine: Kedi's servers connect as `s1`, `s2`, … over stdio or streamable HTTP, their tools declared directly as `mcp__s1__<tool>`; each call takes Kedi's steps as an MCP call under the server's own tool name, its risk from the server's hints (read-only, destructive); the servers stop when the run ends |
 | Transcript, history processing | Kedi's transcript loads into the session (media by ref through `media/get`; a message Kedi did not change returns as pi wrote it, from `providerData`); with a history processor every request carries what it kept |
 | Model-visible text is Kedi's | no discovered extensions, skills, prompt templates or context files (AGENTS.md); Kedi's system text follows pi's own prompt; Kedi's text is never run as a pi command or template |
 
@@ -53,4 +54,3 @@ python ../../testing/fake_kedi.py --bridge "node bridge.ts" ../../fixtures/v1/*.
 with no `node_modules`. The bundle carries the conformance fixtures, so its preflight runs
 wherever it is copied.
 
-Not yet: MCP servers.

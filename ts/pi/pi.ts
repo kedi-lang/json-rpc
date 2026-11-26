@@ -9,6 +9,7 @@ import type { Bridge, Json, JsonObject, ModelCall, Run, RunAnswer, TranscriptMes
 import { RpcError } from "../sdk/src/peer.ts";
 import {
   createAgentSession,
+  createMcpExtension,
   DefaultResourceLoader,
   type ExtensionAPI,
   ModelRuntime,
@@ -49,6 +50,17 @@ const NATIVE_TOOLS: Record<string, "read_only" | "mutating" | "sensitive"> = {
   write: "mutating",
   bash: "sensitive",
 };
+
+/** pi's MCP resource tools, which read from Kedi's servers. */
+const MCP_RESOURCE_TOOLS = new Set(["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]);
+
+/** A Kedi `> mcp:` server as pi's MCP configuration; its tools are declared to the model directly. */
+function mcpConfig(server: NonNullable<Run["params"]["mcpServers"]>[number]): JsonObject {
+  if (server.transport === "stdio") {
+    return { command: server.command ?? "", args: server.args ?? [], env: server.env ?? {}, exposure: "direct" };
+  }
+  return { url: server.url ?? "", headers: server.headers ?? {}, exposure: "direct" };
+}
 
 /** In test mode pi needs a model and a credential, though no request leaves the bridge. */
 const TEST_MODEL: Model<"openai-completions"> = {
@@ -297,7 +309,10 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
   }
 
   const turn = params.continuation ? params.continuation.message : await userTurn(params, run.signal);
+  // Kedi's > mcp: servers, named s1, s2, … in order: pi names their tools mcp__s1__<tool>.
+  const servers = (params.mcpServers ?? []).map((server, index) => [`s${index + 1}`, mcpConfig(server)] as const);
   const kedi = (pi: ExtensionAPI) => {
+    for (const [name, config] of servers) pi.registerMcpServer(name, config as never);
     // Cache warming sends requests of its own, past the stream function Kedi admits; governed
     // promises that every model request is admitted, so pi does not warm.
     pi.on("cache_warming_decision", () => ({ action: "stop" as const }));
@@ -322,12 +337,24 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
       if (params.system) return { systemPrompt: `${event.systemPrompt}\n\n${params.system}` };
       return undefined;
     });
-    const calls = new Map<string, { args: JsonObject }>();
+    const calls = new Map<string, { args: JsonObject; name: string; origin: "adapter_native" | "mcp" }>();
+    /** A pi tool Kedi gates: its name for Kedi, origin and risk; Kedi's own tools are not. */
+    const gated = (toolName: string): { name: string; origin: "adapter_native" | "mcp"; risk: "read_only" | "mutating" | "sensitive" } | undefined => {
+      const native = NATIVE_TOOLS[toolName];
+      if (native) return { name: toolName, origin: "adapter_native", risk: native };
+      if (MCP_RESOURCE_TOOLS.has(toolName)) return { name: toolName, origin: "mcp", risk: "read_only" };
+      const mcp = toolName.match(/^mcp__[A-Za-z0-9_]+?__(.+)$/);
+      if (!mcp) return undefined;
+      // The server's own hints decide the risk: read-only, destructive, or neither.
+      const hints = pi.getAllTools().find((tool) => tool.name === toolName)?.annotations;
+      const risk = hints?.readOnlyHint ? "read_only" : hints?.destructiveHint ? "sensitive" : "mutating";
+      return { name: mcp[1]!, origin: "mcp", risk };
+    };
     pi.on("tool_call", async (event) => {
-      const risk = NATIVE_TOOLS[event.toolName];
-      if (!risk) return undefined; // Kedi's tools are Kedi's to gate; the output tool needs none.
+      const tool = gated(event.toolName);
+      if (!tool) return undefined; // Kedi's tools are Kedi's to gate; the output tool needs none.
       try {
-        const before = await run.beforeNativeTool({ callId: event.toolCallId, name: event.toolName, arguments: event.input as JsonObject, risk });
+        const before = await run.beforeNativeTool({ callId: event.toolCallId, name: tool.name, origin: tool.origin, arguments: event.input as JsonObject, risk: tool.risk });
         if (!before.run) return { block: true, reason: before.reason };
         const args = structuredClone(before.arguments);
         if (before.arguments !== event.input) {
@@ -336,7 +363,7 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
           for (const key of Object.keys(input)) delete input[key];
           Object.assign(input, args);
         }
-        calls.set(event.toolCallId, { args });
+        calls.set(event.toolCallId, { args, name: tool.name, origin: tool.origin });
         return undefined;
       } catch (error) {
         failure ??= error;
@@ -351,7 +378,7 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
       const said = event.content.map((part) => (part.type === "text" ? part.text : "")).join("");
       try {
         const outcome = await run.afterNativeTool(
-          { callId: event.toolCallId, name: event.toolName, arguments: call.args },
+          { callId: event.toolCallId, name: call.name, origin: call.origin, arguments: call.args },
           call.args,
           event.isError ? { error: new Error(said) } : { result: said },
         );
@@ -382,7 +409,11 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    extensionFactories: [{ name: "kedi", factory: kedi }] as never,
+    extensionFactories: [
+      { name: "kedi", factory: kedi },
+      // pi's MCP client, with no configuration of its own: no mcp.json of this machine loads.
+      ...(servers.length ? [createMcpExtension({ loadConfig: () => ({ servers: [], errors: [], autoEnableCodemode: false }) })] : []),
+    ] as never,
   });
   await resourceLoader.reload();
   const entries = ((params.session?.state as JsonObject | null)?.entries ?? undefined) as never;
@@ -411,6 +442,8 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
     ...(params.effort ? { thinkingLevel: params.effort } : {}),
   });
 
+  // session_start connects the MCP servers; the first prompt waits for their direct tools.
+  if (servers.length) await session.bindExtensions({});
   const real = session.agent.streamFunction;
   const sampling = streamSettings(params.settings);
   let replies = 0;
@@ -509,23 +542,33 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
   run.signal.addEventListener("abort", stop, { once: true });
   try {
     await session.sendUserMessage(turn, { expandPromptTemplates: false });
+    if (run.signal.aborted) throw run.signal.reason;
+    if (failure) throw failure;
+    const last = session.messages.filter((message): message is AssistantMessage => message.role === "assistant").at(-1);
+    if (last?.stopReason === "error") throw new Error(last.errorMessage ?? "pi's model request failed");
+    const said = text(last);
+    const handed = back();
+    if (!output) return { text: said, ...handed };
+    if (data) return { data: data.value, ...handed };
+    try {
+      return { data: JSON.parse(said) as Json, ...handed };
+    } catch (error) {
+      return { invalid: said, error: String(error), ...handed };
+    }
   } finally {
     run.signal.removeEventListener("abort", stop);
+    await close(session);
   }
-  if (run.signal.aborted) throw run.signal.reason;
-  if (failure) throw failure;
-  const last = session.messages.filter((message): message is AssistantMessage => message.role === "assistant").at(-1);
-  if (last?.stopReason === "error") throw new Error(last.errorMessage ?? "pi's model request failed");
-  const said = text(last);
-  const handed = back();
+}
+
+/**
+ * Ends a session however its run ended: session_shutdown first, as pi's own runtime does, so
+ * extensions close what they opened, such as MCP servers, then the session itself.
+ */
+async function close(session: Awaited<ReturnType<typeof createAgentSession>>["session"]): Promise<void> {
+  await session.abort();
+  await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" } as never);
   session.dispose();
-  if (!output) return { text: said, ...handed };
-  if (data) return { data: data.value, ...handed };
-  try {
-    return { data: JSON.parse(said) as Json, ...handed };
-  } catch (error) {
-    return { invalid: said, error: String(error), ...handed };
-  }
 }
 
 /** The run's `> settings:` as pi's request options: the ones every pi provider applies alike. */
@@ -565,6 +608,8 @@ export function piBridge(options: PiBridgeOptions): Bridge {
       kind: "agent-harness",
       mediaKinds: ["image"],
       settings: ["temperature", "max_tokens"],
+      // pi connects stdio and streamable HTTP servers; it refuses SSE.
+      mcp: { transports: ["stdio", "http"] },
       effort: ["minimal", "low", "medium", "high", "xhigh", "max"],
       capabilities: {
         tools: true,
