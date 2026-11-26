@@ -1,0 +1,36 @@
+name: kedi
+
+# Kedi stable's copy of the schema matches this one, and the fixtures pass against Kedi's
+# reference bridge.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * *"
+
+jobs:
+  reference-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: kedi-lang/kedi
+          ref: stable
+          path: kedi
+          sparse-checkout: src/kedi/agent_adapter/adapters/jsonrpc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m pip install "jsonschema==4.26.0"
+      - name: Kedi's schema copy matches its source
+        run: diff -u schema/v1/protocol.json kedi/src/kedi/agent_adapter/adapters/jsonrpc/protocol.schema.json
+      - name: The fixtures pass against the reference bridge
+        run: >-
+          python testing/fake_kedi.py
+          --bridge "node kedi/src/kedi/agent_adapter/adapters/jsonrpc/openai_chat_bridge.mjs --base-url http://127.0.0.1:9/v1"
+          fixtures/v1/*.json
