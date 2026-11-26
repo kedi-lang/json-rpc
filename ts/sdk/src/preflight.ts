@@ -51,6 +51,8 @@ interface Fixture {
   model?: JsonObject[];
   tools?: Record<string, { result?: Json; error?: string }>;
   budget?: Record<string, number>;
+  failModels?: string[];
+  historyProcess?: { keepLast?: number };
   onModelRequest?: Record<string, ({ send: string } & JsonObject)[]>;
   expect?: JsonObject;
 }
@@ -139,41 +141,34 @@ export function cacheDir(): string {
 }
 
 /**
- * What the preflight's result depends on: the bridge's entry and package (its files and
- * lockfile), the SDK (its version and sources), the fixtures, and the handshake.
+ * What the preflight's result depends on: the bridge's entry, the SDK's version, the fixtures
+ * and the handshake; running from sources, also the SDK's sources and the bridge's package (its
+ * files and lockfile) when the entry's own directory holds its package.json. A bundled bridge
+ * carries the SDK and its dependencies in the entry, so the entry alone stands for them.
  */
 export function fingerprint(bridge: Bridge, entry: string): string {
   const hash = createHash("sha256");
   hash.update(`sdk ${SDK_VERSION}\n`);
   hash.update(`fixtures ${JSON.stringify(FIXTURES)}\n`);
   hash.update(`handshake ${JSON.stringify(bridge.handshake)}\n`);
-  const root = packageRoot(dirname(resolve(entry)));
   const files = new Set<string>([resolve(entry)]);
-  for (const directory of [root, SDK_SOURCES]) {
-    if (directory) for (const file of walk(directory)) files.add(file);
+  if (SDK_SOURCES) {
+    // Never above the entry's directory: an installed bridge may sit below a home directory
+    // whose package.json would otherwise make every file under it part of the bridge.
+    const root = dirname(resolve(entry));
+    const own = existsSync(join(root, "package.json")) ? root : undefined;
+    for (const directory of [own, SDK_SOURCES]) {
+      if (directory) for (const file of walk(directory)) files.add(file);
+    }
+    for (const name of ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"]) {
+      if (own && existsSync(join(own, name))) files.add(join(own, name));
+    }
   }
-  const lockfile = root && findUp(root, ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"]);
-  if (lockfile) files.add(lockfile);
   for (const file of [...files].sort()) {
     hash.update(`${file}\n`);
     hash.update(readFileSync(file));
   }
   return hash.digest("hex").slice(0, 32);
-}
-
-function packageRoot(start: string): string | undefined {
-  const found = findUp(start, ["package.json"]);
-  return found && dirname(found);
-}
-
-function findUp(start: string, names: string[]): string | undefined {
-  for (let directory = start; ; directory = dirname(directory)) {
-    for (const name of names) {
-      const candidate = join(directory, name);
-      if (existsSync(candidate)) return candidate;
-    }
-    if (dirname(directory) === directory) return undefined;
-  }
 }
 
 const SKIPPED_DIRECTORIES = new Set(["node_modules", ".git", "dist", "coverage"]);
@@ -200,11 +195,13 @@ async function runFixture(bridge: Bridge, fixture: Fixture): Promise<string[]> {
   const kedi = new Peer(fromBridge, { write: (frame: string) => toBridge.write(frame) });
   const sent: string[] = [];
   const seen: JsonObject[] = [];
+  const events: JsonObject[] = [];
   const answers: Promise<{ method: string; answer: Answer }>[] = [];
   const script = [...(fixture.model ?? [])];
   const budget = { ...(fixture.budget ?? {}) };
   kedi.onMessage((message) => {
     if (typeof message.method === "string") sent.push(message.method);
+    if (message.method === "run/event") events.push(message.params as JsonObject);
   });
   kedi.onRequest("model/complete", async (params) => {
     seen.push(params);
@@ -214,6 +211,7 @@ async function runFixture(bridge: Bridge, fixture: Fixture): Promise<string[]> {
       if (send === "run/input") answers.push(settle(send, kedi.request(send, params)));
       else kedi.notify(send, params);
     }
+    if (fixture.failModels?.includes(String(params.model))) throw new RpcError(-32002, `model ${params.model} is down`);
     const reply = script.shift() ?? { parts: [{ type: "text", text: "done" }] };
     return { message: { role: "assistant", ...reply } };
   });
@@ -227,6 +225,11 @@ async function runFixture(bridge: Bridge, fixture: Fixture): Promise<string[]> {
     if (left !== undefined) budget[dimension] = left - 1;
     return { admitted: true };
   });
+  kedi.onRequest("history/process", async (params): Promise<JsonObject> => {
+    const keep = fixture.historyProcess?.keepLast;
+    const messages = params.messages as Json[];
+    return { messages: keep ? messages.slice(-keep) : messages };
+  });
   kedi.onRequest("tool/call", async (params): Promise<JsonObject> => {
     const tool = fixture.tools?.[String(params.name)] ?? { error: "unknown tool" };
     return "result" in tool ? { ok: true, result: tool.result as Json } : { ok: false, error: String(tool.error) };
@@ -238,7 +241,7 @@ async function runFixture(bridge: Bridge, fixture: Fixture): Promise<string[]> {
     const params = { ...RUN_DEFAULTS, user: "Hello.", ...(fixture.run ?? {}), runId: "run-1" };
     const answer = await withTimeout(settle("run", kedi.request("run", params)), "the run");
     const replies = await withTimeout(Promise.all(answers), "run/input");
-    problems.push(...expectations(fixture.expect ?? {}, answer.answer, seen, sent, replies));
+    problems.push(...expectations(fixture.expect ?? {}, answer.answer, seen, sent, replies, events));
   } catch (error) {
     problems.push(String((error as Error).message ?? error));
   } finally {
@@ -273,6 +276,7 @@ function expectations(
   seen: JsonObject[],
   sent: string[],
   replies: { method: string; answer: Answer }[],
+  events: JsonObject[],
 ): string[] {
   const found: string[] = [];
   const shown = answer.error ? `an error, ${answer.error.code}: ${answer.error.message}` : JSON.stringify(answer.result);
@@ -298,6 +302,15 @@ function expectations(
     if (!strings(request).some((text) => text.includes(check.contains))) {
       found.push(`model request ${check.request} did not carry ${JSON.stringify(check.contains)}`);
     }
+  }
+  for (const check of (expect.modelMissed as { request: number; contains: string }[] | undefined) ?? []) {
+    const request = seen[check.request - 1];
+    if (strings(request).some((text) => text.includes(check.contains))) {
+      found.push(`model request ${check.request} carried ${JSON.stringify(check.contains)}`);
+    }
+  }
+  for (const wanted of (expect.events as JsonObject[] | undefined) ?? []) {
+    if (!events.some((event) => contains(event, wanted))) found.push(`no run/event held ${JSON.stringify(wanted)}; the bridge sent ${JSON.stringify(events)}`);
   }
   const order = expect.order as string[] | undefined;
   if (order) {

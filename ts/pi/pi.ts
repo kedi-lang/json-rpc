@@ -557,6 +557,11 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
     }
   } finally {
     run.signal.removeEventListener("abort", stop);
+    if (run.signal.aborted) {
+      // An interrupted attempt's snapshot is read after the run ends: take it while it is open.
+      const taken = back();
+      run.onInterrupt(() => taken);
+    }
     await close(session);
   }
 }

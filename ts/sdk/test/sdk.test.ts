@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe as suite, test } from "node:test";
@@ -37,7 +37,10 @@ suite("preflight", () => {
     assert.deepEqual(report.diagnostics, [], describe(report));
     assert.ok(report.passed.includes("governed-admits-each-request"));
     assert.ok(report.passed.includes("usage"));
-    assert.deepEqual(report.skipped.map((skip) => skip.name), ["interrupt-session", "interrupt", "live-input", "structured", "transcript"]);
+    assert.deepEqual(report.skipped.map((skip) => skip.name), [
+      "events", "history-processing", "interrupt-session", "interrupt-transcript", "interrupt",
+      "live-input", "media-input", "model-fallback", "structured", "transcript",
+    ]);
   });
 
   test("declared live input that never reaches the model is an error, with the fix", async () => {
@@ -108,6 +111,20 @@ suite("cache", () => {
     assert.equal(replayed.cached, true);
     assert.deepEqual(replayed.diagnostics, first.diagnostics);
     assert.match(describe(replayed), /cached: the bridge is unchanged/);
+  });
+
+  test("the fingerprint never reaches above the bridge's own directory", () => {
+    // An installed bridge below a home directory that happens to hold a package.json.
+    const home = mkdtempSync(join(tmpdir(), "kedi-home-"));
+    writeFileSync(join(home, "package.json"), "{}");
+    writeFileSync(join(home, "notes.txt"), "v1");
+    const installed = join(home, "registry", "pi");
+    mkdirSync(installed, { recursive: true });
+    writeFileSync(join(installed, "bridge.mjs"), "// bridge\n");
+    const bridge = minimal({ testModel: true });
+    const before = fingerprint(bridge, join(installed, "bridge.mjs"));
+    writeFileSync(join(home, "notes.txt"), "v2");
+    assert.equal(fingerprint(bridge, join(installed, "bridge.mjs")), before);
   });
 
   test("the fingerprint covers the handshake", () => {

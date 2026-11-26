@@ -27,6 +27,8 @@ A fixture is a JSON file:
 | `model` | the test model's replies, in order: assistant messages in Kedi's transcript schema (`{"parts": [...]}`); `done` once they run out |
 | `tools` | Kedi's tools: `{"name": {"result": ...}}` or `{"name": {"error": "..."}}` for `tool/call` |
 | `budget` | admissions left per `budget/admit` dimension (`request`, `toolAttempt`); then denied |
+| `failModels` | models whose `model/complete` fails, as a model endpoint that is down |
+| `historyProcess` | how `history/process` answers: `{"keepLast": N}` keeps the newest N messages |
 | `onModelRequest` | what the fake Kedi sends when model request N arrives, before answering it: `{"N": [{"send": "run/input", "items": [...]}]}`, `run/interrupt`, `run/cancel` |
 | `expect` | what must hold once the run answers (below) |
 
@@ -39,6 +41,8 @@ A fixture is a JSON file:
 | `errorDataKeys` | the run's error `data` has these fields |
 | `modelRequests` | the bridge sent this many model requests |
 | `modelSaw` | model request N carried a string containing this text |
+| `modelMissed` | model request N carried no string containing this text |
+| `events` | for each entry, a `run/event` notification contains these fields |
 | `order` | the bridge's requests include these methods in this order |
 | `count` | the bridge sent this method this many times |
 | `answers` | the bridge answered a request of this method with a result containing these fields |

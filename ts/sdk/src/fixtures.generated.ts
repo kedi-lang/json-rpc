@@ -73,6 +73,82 @@ export const FIXTURES = [
     }
   },
   {
+    "name": "events",
+    "code": "KB113",
+    "description": "With events, the model's text beside its tool calls is reported as commentary.",
+    "failure": "the bridge's events do not report the model's commentary",
+    "help": "send run/event message.completed with phase commentary for text beside tool calls (run.event)",
+    "spec": "4-capabilities",
+    "capabilities": [
+      "events",
+      "tools"
+    ],
+    "run": {
+      "tools": [
+        {
+          "name": "lookup",
+          "description": "Look up a city's country.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "city"
+            ]
+          },
+          "outputSchema": null,
+          "requiredBeforeOutput": false
+        }
+      ]
+    },
+    "model": [
+      {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me look it up."
+          },
+          {
+            "type": "toolCall",
+            "id": "t1",
+            "name": "lookup",
+            "arguments": {
+              "city": "Lyon"
+            }
+          }
+        ]
+      },
+      {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Lyon is in France."
+          }
+        ]
+      }
+    ],
+    "tools": {
+      "lookup": {
+        "result": "France"
+      }
+    },
+    "expect": {
+      "result": {
+        "text": "Lyon is in France."
+      },
+      "events": [
+        {
+          "type": "message.completed",
+          "phase": "commentary",
+          "text": "Let me look it up."
+        }
+      ]
+    }
+  },
+  {
     "name": "governed-admits-each-request",
     "code": "KB103",
     "description": "A governed bridge asks budget/admit before every model request.",
@@ -218,6 +294,76 @@ export const FIXTURES = [
     }
   },
   {
+    "name": "history-processing",
+    "code": "KB116",
+    "description": "With processHistory, the request carries what the program's history processor kept, and the run answers the whole transcript.",
+    "failure": "the history processor's result does not decide what the request carries",
+    "help": "ask history/process before each request, send what it returns, and answer transcript",
+    "spec": "7-history",
+    "capabilities": [
+      "transcript"
+    ],
+    "historyProcess": {
+      "keepLast": 1
+    },
+    "run": {
+      "user": "What is my name?",
+      "history": [
+        {
+          "id": "m1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "My name is Ada."
+            }
+          ]
+        },
+        {
+          "id": "m2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "Hello, Ada."
+            }
+          ]
+        }
+      ],
+      "processHistory": true
+    },
+    "model": [
+      {
+        "parts": [
+          {
+            "type": "text",
+            "text": "I do not know."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "result": {
+        "text": "I do not know."
+      },
+      "resultKeys": [
+        "transcript"
+      ],
+      "modelMissed": [
+        {
+          "request": 1,
+          "contains": "My name is Ada."
+        }
+      ],
+      "count": [
+        {
+          "method": "history/process",
+          "times": 1
+        }
+      ]
+    }
+  },
+  {
     "name": "interrupt-session",
     "code": "KB108",
     "description": "An interrupted run in a session answers -32006 with its state, so the conversation continues.",
@@ -258,6 +404,67 @@ export const FIXTURES = [
       },
       "errorDataKeys": [
         "state"
+      ]
+    }
+  },
+  {
+    "name": "interrupt-transcript",
+    "code": "KB117",
+    "description": "An interrupted transcript run answers -32006 with the turn's messages so far.",
+    "failure": "an interrupted transcript run does not hand back its messages",
+    "help": "register run.onInterrupt to return {messages}, the turn so far in Kedi's schema",
+    "spec": "8-children-and-live-input",
+    "capabilities": [
+      "interrupt",
+      "transcript"
+    ],
+    "run": {
+      "history": [
+        {
+          "id": "m1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "My name is Ada."
+            }
+          ]
+        },
+        {
+          "id": "m2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "Hello, Ada."
+            }
+          ]
+        }
+      ]
+    },
+    "onModelRequest": {
+      "1": [
+        {
+          "send": "run/interrupt"
+        }
+      ]
+    },
+    "model": [
+      {
+        "parts": [
+          {
+            "type": "text",
+            "text": "Too late."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "error": {
+        "code": -32006
+      },
+      "errorDataKeys": [
+        "messages"
       ]
     }
   },
@@ -490,6 +697,100 @@ export const FIXTURES = [
           "result": {
             "delivered": true
           }
+        }
+      ]
+    }
+  },
+  {
+    "name": "media-input",
+    "code": "KB114",
+    "description": "An image of the user turn reaches the model.",
+    "failure": "the user turn's media does not reach the model",
+    "help": "send run.params.userContent's media parts to the model where Kedi put them",
+    "spec": "5-runs",
+    "capabilities": [
+      "mediaInput"
+    ],
+    "run": {
+      "user": "Look at photo please.",
+      "userContent": [
+        {
+          "type": "text",
+          "text": "Look at "
+        },
+        {
+          "type": "media",
+          "name": "photo",
+          "kind": "image",
+          "mediaType": "image/png",
+          "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+        },
+        {
+          "type": "text",
+          "text": " please."
+        }
+      ]
+    },
+    "model": [
+      {
+        "parts": [
+          {
+            "type": "text",
+            "text": "A pixel."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "result": {
+        "text": "A pixel."
+      },
+      "modelSaw": [
+        {
+          "request": 1,
+          "contains": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+        }
+      ]
+    }
+  },
+  {
+    "name": "model-fallback",
+    "code": "KB115",
+    "description": "When the primary model fails, the request is tried on the fallback model.",
+    "failure": "a failed request is not tried on the fallback models",
+    "help": "with modelFallback, try run.params.fallbackModels in order when a request fails (run.modelRequest does)",
+    "spec": "4-capabilities",
+    "capabilities": [
+      "modelFallback"
+    ],
+    "failModels": [
+      "primary"
+    ],
+    "run": {
+      "model": "primary",
+      "fallbackModels": [
+        "backup"
+      ]
+    },
+    "model": [
+      {
+        "parts": [
+          {
+            "type": "text",
+            "text": "From the backup."
+          }
+        ]
+      }
+    ],
+    "expect": {
+      "result": {
+        "text": "From the backup."
+      },
+      "modelRequests": 2,
+      "modelSaw": [
+        {
+          "request": 2,
+          "contains": "backup"
         }
       ]
     }

@@ -177,6 +177,10 @@ def _exercise(bridge: Bridge, fixture: dict[str, Any], outcome: Outcome) -> None
             seen.append(message["params"])
             for action in actions.get(len(seen), []):
                 _act(bridge, action, run_id)
+            if message["params"].get("model") in fixture.get("failModels", []):
+                down = {"code": -32002, "message": f"model {message['params']['model']} is down"}
+                bridge.send({"id": message["id"], "error": down})
+                continue
             reply = script.pop(0) if script else {"parts": [{"type": "text", "text": "done"}]}
             bridge.send({"id": message["id"], "result": {"message": {"role": "assistant", **reply}}})
         elif method == "budget/admit":
@@ -197,6 +201,11 @@ def _exercise(bridge: Bridge, fixture: dict[str, Any], outcome: Outcome) -> None
                 "error": answer["error"],
             }
             bridge.send({"id": message["id"], "result": result})
+        elif method == "history/process":
+            keep = fixture.get("historyProcess", {}).get("keepLast")
+            messages = message["params"]["messages"]
+            kept = messages[-keep:] if keep else messages
+            bridge.send({"id": message["id"], "result": {"messages": kept}})
         elif method == "run/input" or "id" not in message:
             continue  # notifications (run/usage, run/event) are only recorded
         else:
@@ -274,6 +283,14 @@ def _check_expect(
         request = seen[check["request"] - 1] if len(seen) >= check["request"] else None
         if not any(check["contains"] in text for text in _strings(request)):
             outcome.problems.append(f"model request {check['request']} did not carry {check['contains']!r}")
+    for check in expect.get("modelMissed", []):
+        request = seen[check["request"] - 1] if len(seen) >= check["request"] else None
+        if any(check["contains"] in text for text in _strings(request)):
+            outcome.problems.append(f"model request {check['request']} carried {check['contains']!r}")
+    events = [frame.get("params", {}) for side, frame in frames if side == "bridge" and frame.get("method") == "run/event"]
+    for wanted in expect.get("events", []):
+        if not any(_contains(event, wanted) for event in events):
+            outcome.problems.append(f"no run/event held {wanted}, the bridge sent {events}")
     order = expect.get("order")
     if order:
         methods = [frame.get("method") for side, frame in frames if side == "bridge" and frame.get("method")]
