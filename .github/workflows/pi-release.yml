@@ -1,0 +1,61 @@
+name: pi release
+
+# Builds the pi bridge into one file and tags a release commit holding it, off main: the Kedi
+# package in packages/pi then carries bridge.mjs at that tag, and a registry record can point
+# at the tag's commit (package_manifest_path: packages/pi/package.kedi).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version in packages/pi/package.kedi, such as 0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: The version is the manifest's, and not released yet
+        run: |
+          grep -qxF "  version: $VERSION" packages/pi/package.kedi || {
+            echo "::error::packages/pi/package.kedi does not declare version $VERSION"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/pi-v$VERSION" >/dev/null; then
+            echo "::error::pi-v$VERSION is already released"; exit 1
+          fi
+      - name: Build the bridge
+        working-directory: ts/pi
+        run: |
+          npm ci
+          npm run check
+          npm test
+          npm run build
+      - name: The bundle runs alone, with only Node
+        run: |
+          lone="$(mktemp -d)"
+          cp ts/pi/dist/bridge.mjs "$lone/"
+          node "$lone/bridge.mjs" --check
+      - name: Tag the release commit
+        run: |
+          cp ts/pi/dist/bridge.mjs ts/pi/dist/THIRD_PARTY_LICENSES.txt packages/pi/src/pi/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --detach
+          git add -f packages/pi/src/pi/bridge.mjs packages/pi/src/pi/THIRD_PARTY_LICENSES.txt
+          git commit -q -m "pi $VERSION: the bundled bridge"
+          git tag -a "pi-v$VERSION" -m "pi $VERSION"
+          git push origin "pi-v$VERSION"
+          {
+            echo "## pi $VERSION"
+            echo
+            echo "- tag: \`pi-v$VERSION\`"
+            echo "- verified_commit: \`$(git rev-parse HEAD)\`"
+            echo "- package_manifest_path: \`packages/pi/package.kedi\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,8 @@
+> package: pi:
+  version: 0.1.0
+  source: src/pi
+  license: Apache-2.0
+  adapters:
+    pi:
+      kind: agent
+      command: node bridge.mjs

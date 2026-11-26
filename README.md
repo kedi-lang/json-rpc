@@ -20,6 +20,7 @@ other side is `JsonRpcAdapter`; see
 | `testing/` | A fake Kedi to test and preflight bridges against |
 | `ts/sdk/` | The TypeScript bridge SDK: `serve()`, preflight checks, diagnostics |
 | `ts/pi/` | The bridge for the [pi](https://pi.dev) coding agent, on pi's TypeScript SDK |
+| `packages/pi/` | The `pi` Kedi package: `> import: pi`, then `> agent: pi` |
 | `python/` | Bridges for Python harnesses |
 
 The reference bridge for OpenAI-compatible endpoints ships with Kedi

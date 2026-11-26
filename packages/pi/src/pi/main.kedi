@@ -1,0 +1,4 @@
+# The pi package: `> import: pi`, then `> agent: pi` runs the pi coding agent.
+#
+# The pi bridge (bridge.mjs) is added by the release workflow; see
+# https://github.com/kedi-lang/json-rpc/tree/main/ts/pi.
