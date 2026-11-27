@@ -38,8 +38,10 @@ YAML file with Hermes's `providers:` mapping (`providers.<name>.api`, `api_key`)
 - **Isolation.** The bridge gives Hermes a `HOME` and `HERMES_HOME` of its own, so no user
   plugin, skill, memory, context file or session reaches a run.
   - **What it turns off.** Automatic compression and retries of side calls are off.
-  - **Where the home lives.** The home is temporary per process. `KEDI_HERMES_HOME` keeps it in
-    a directory you choose.
+  - **Where the home lives.** One home per process, removed at exit; a killed bridge's home is
+    removed by the next bridge to start. Installed as a Kedi package, it lives in the package's
+    runtime directory (`KEDI_PACKAGE_RUNTIME_DIR`), so `kedi remove` takes it with the package.
+    `KEDI_HERMES_HOME` keeps it in a directory you choose.
 - **Hermes's system prompt.** Hermes keeps its own identity and runtime environment text
   around Kedi's system text, as a harness does.
 - **Sessions.** State mode: `state` holds Hermes's messages, and the next turn continues from

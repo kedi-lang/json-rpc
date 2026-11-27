@@ -39,14 +39,17 @@ TEST_BASE_URL = "http://kedi-test-model.invalid/v1"
 def prepare() -> Path:
     """Creates the home, points ``HOME`` and ``HERMES_HOME`` at it, and returns ``HERMES_HOME``.
 
-    ``KEDI_HERMES_HOME`` names a directory to keep it in. Otherwise it is a temporary one per
-    process, removed at exit; a killed bridge's home is removed by the next bridge to start."""
+    ``KEDI_HERMES_HOME`` names a directory to keep it in. Otherwise it is one per process,
+    removed at exit; a killed bridge's home is removed by the next bridge to start. It lives in
+    the package's runtime directory when Kedi gives one (``KEDI_PACKAGE_RUNTIME_DIR``), so
+    ``kedi remove`` takes it with the package, and in the temporary directory otherwise."""
     kept = os.environ.get("KEDI_HERMES_HOME")
     if kept:
         root = Path(kept)
     else:
-        parent = Path(tempfile.gettempdir()) / "kedi-hermes"
-        parent.mkdir(exist_ok=True)
+        runtime = os.environ.get("KEDI_PACKAGE_RUNTIME_DIR")
+        parent = Path(runtime) / "hermes" if runtime else Path(tempfile.gettempdir()) / "kedi-hermes"
+        parent.mkdir(parents=True, exist_ok=True)
         _sweep(parent)
         root = parent / str(os.getpid())
         shutil.rmtree(root, ignore_errors=True)
