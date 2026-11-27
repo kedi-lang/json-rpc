@@ -1,0 +1,38 @@
+name: python
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  sdk:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: The embedded fixtures match fixtures/v1
+        run: python scripts/sync_fixtures.py --check
+      - name: Tests
+        run: python -m unittest discover -s tests -v
+        env:
+          PYTHONPATH: src:tests
+      - name: The example passes its preflight
+        run: python examples/chat.py --check
+        env:
+          PYTHONPATH: src
+      - name: The example passes the fixtures over stdio, every frame checked against the schema
+        run: |
+          python -m pip install "jsonschema==4.26.0"
+          python ../testing/fake_kedi.py --bridge "python examples/chat.py" ../fixtures/v1/*.json
+        env:
+          PYTHONPATH: src
+          KEDI_BRIDGE_PREFLIGHT: "off"

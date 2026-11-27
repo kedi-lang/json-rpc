@@ -21,7 +21,7 @@ other side is `JsonRpcAdapter`; see
 | `ts/sdk/` | The TypeScript bridge SDK: `serve()`, preflight checks, diagnostics |
 | `ts/pi/` | The bridge for the [pi](https://pi.dev) coding agent, on pi's TypeScript SDK |
 | `packages/pi/` | The `pi` Kedi package: `> import: pi`, then `> agent: pi` |
-| `python/` | Bridges for Python harnesses |
+| `python/` | The Python bridge SDK (`kedi-bridge`): the same `serve()`, preflight and diagnostics, standard library only |
 
 The reference bridge for OpenAI-compatible endpoints ships with Kedi
 (`kedi/agent_adapter/adapters/jsonrpc/openai_chat_bridge.mjs`).
