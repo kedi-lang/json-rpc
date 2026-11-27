@@ -6,6 +6,10 @@ physical request any Hermes client makes. A model request (a POST to a chat comp
 or responses path) is admitted with ``budget/admit``; in test mode Kedi's test model answers it,
 and no request leaves the process. Everything else passes through.
 
+A model request is a POST to a chat completions, messages or responses path, or any POST to the
+host a run's model resolved to: a provider's native API (Gemini's ``/interactions``, for one)
+is gated as well, so the gate fails closed when Hermes takes a path it does not know.
+
 A request belongs to the run named by its ``X-Kedi-Run`` header (a delegated child's route sets
 it) or, without one, to the run the calling thread works for (``CURRENT_RUN``). A model request
 that belongs to no run is refused: nothing reaches a model ungoverned.
@@ -21,13 +25,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from convert import completion, event_stream, model_call, usage_of
+from convert import completion, event_stream, model_call
 
 from kedi_bridge import JsonObject, ModelRequest, Run, RunStopped
 
 CURRENT_RUN: ContextVar[str | None] = ContextVar("kedi_hermes_run", default=None)
 RUN_HEADER = "x-kedi-run"
 MODEL_PATHS = ("/chat/completions", "/messages", "/responses")
+# Metadata Hermes probes for at startup (an Ollama context-length lookup): no model answers it.
+PROBE_PATHS = frozenset({"/api/show"})
 
 
 @dataclass
@@ -42,14 +48,26 @@ class GatedRun:
 class Gate:
     def __init__(self) -> None:
         self._runs: dict[str, GatedRun] = {}
+        self._model_hosts: set[str] = set()
+        """Every host a run's model resolved to; kept after the run, so a late request is refused."""
         self._lock = threading.Lock()
         self._installed = False
 
-    def open(self, run: Run) -> GatedRun:
+    def open(self, run: Run, model_host: str | None) -> GatedRun:
         gated = GatedRun(run)
         with self._lock:
             self._runs[run.id] = gated
+            if model_host:
+                self._model_hosts.add(model_host)
         return gated
+
+    def is_model_request(self, request: httpx.Request) -> bool:
+        if request.method != "POST" or request.url.path in PROBE_PATHS:
+            return False
+        if request.url.path.endswith(MODEL_PATHS):
+            return True
+        with self._lock:
+            return request.url.host in self._model_hosts
 
     def close(self, run_id: str) -> None:
         with self._lock:
@@ -64,12 +82,12 @@ class Gate:
         gate = self
 
         def handle_request(transport: httpx.HTTPTransport, request: httpx.Request) -> httpx.Response:
-            if not _is_model_request(request):
+            if not gate.is_model_request(request):
                 return sync_send(transport, request)
             return gate._handle(request, lambda forwarded: sync_send(transport, forwarded))
 
         async def handle_async_request(transport: httpx.AsyncHTTPTransport, request: httpx.Request) -> httpx.Response:
-            if not _is_model_request(request):
+            if not gate.is_model_request(request):
                 return await async_send(transport, request)
             await request.aread()
             loop = asyncio.get_running_loop()
@@ -109,17 +127,14 @@ class Gate:
                 return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=event_stream(built), request=request)
             return httpx.Response(200, json=built, request=request)
 
-        def usage(response: httpx.Response) -> JsonObject | None:
-            if streamed and not run.test_mode:
-                return {"requests": 1}  # counts arrive at the stream's end; unknown here
-            try:
-                return usage_of(json.loads(response.read() if not run.test_mode else response.content))
-            except ValueError:
-                return {"requests": 1}
+        def describe() -> JsonObject:
+            if "messages" in body:
+                return model_call(body)
+            # A provider's native request: its text, so live input can still be seen in it.
+            raw = request.content.decode("utf-8", "replace")
+            return {"system": None, "messages": [{"role": "user", "parts": [{"type": "text", "text": raw}]}], "tools": [], "output": None}
 
-        model_request: ModelRequest[httpx.Response] = ModelRequest(
-            send=send, describe=lambda: model_call(body), reply=reply, usage=usage,
-        )
+        model_request: ModelRequest[httpx.Response] = ModelRequest(send=send, describe=describe, reply=reply)
         try:
             with gated.lock:
                 gated.requests += 1
@@ -130,10 +145,6 @@ class Gate:
         except Exception as error:  # noqa: BLE001 - Kedi's denial or a failed model ends the turn
             gated.failure = error
             return _refusal(request, str(error) or type(error).__name__)
-
-
-def _is_model_request(request: httpx.Request) -> bool:
-    return request.method == "POST" and request.url.path.endswith(MODEL_PATHS)
 
 
 def _without_header(request: httpx.Request) -> httpx.Request:

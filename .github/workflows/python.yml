@@ -55,6 +55,11 @@ jobs:
         run: uv sync --frozen --no-dev --python 3.14
         env:
           UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/hermes-venv
+      - name: Real mode against a stub upstream, every request on the wire admitted
+        working-directory: python/hermes
+        run: ${{ github.workspace }}/hermes-venv/bin/python -m unittest discover -s tests -v
+        env:
+          PYTHONPATH: ${{ github.workspace }}/python/src:${{ github.workspace }}/python/hermes
       - name: The Hermes bridge passes its preflight
         working-directory: python/hermes
         run: ${{ github.workspace }}/hermes-venv/bin/python bridge.py --check

@@ -13,7 +13,9 @@ with Hermes **v0.23.4**.
 
 `> model:` names a Hermes provider and model as `provider/model`. Hermes resolves the provider's
 credentials from its environment variables (`GEMINI_API_KEY`, `OPENROUTER_API_KEY`, ...), as it
-does for its own sessions.
+does for its own sessions. For a local or private endpoint, point `KEDI_HERMES_PROVIDERS` at a
+YAML file with Hermes's `providers:` mapping (`providers.<name>.api`, `api_key`) and name it as
+`<name>/<model>`; the bridge does not read your `~/.hermes/config.yaml`.
 
 ## How it works
 
@@ -21,8 +23,10 @@ does for its own sessions.
   request is sent again without streaming. So the bridge admits model requests at the wire.
   - **Where it sits.** It wraps httpx's transports, which carry every physical request any
     Hermes client makes.
-  - **Admission.** Each model request (a POST to a chat completions, messages or responses
-    path) is admitted with `budget/admit` before it is sent.
+  - **Admission.** Each model request is admitted with `budget/admit` before it is sent. A model
+    request is a POST to a chat completions, messages or responses path, or any POST to the
+    host the run's model resolved to. That covers a provider's native API too, such as Gemini's
+    `/interactions`, so the gate fails closed on a path it does not know.
   - **Test mode.** Kedi's test model answers the request, and nothing leaves the process.
   - **Which run.** A request belongs to the run whose thread sent it, or to the run its
     `X-Kedi-Run` header names.
@@ -45,11 +49,13 @@ does for its own sessions.
 
 `tools`, `nativeToolCalling`, `structuredOutput`, `governed`, `subagents` (Kedi's children
 run as runs), `liveInput` (Hermes's steering: a user row after the current tool batch),
-`interrupt`, `sessions`, `usage`, `testModel`. It passes 12 conformance fixtures and skips 7, for
+`interrupt`, `sessions`, `testModel`. It passes 11 conformance fixtures and skips 8, for
 capabilities still to come:
 - native tools, MCP and media input;
 - transcript mode and history processing;
 - events;
+- per-request usage (`run/usage`). A streamed reply's counts arrive at its end, so the run
+  reports Hermes's totals instead;
 - compaction;
 - model fallback;
 - Hermes's own subagents (`delegate_task`), governed with `subagent/admit` (phase 5 B).
@@ -63,5 +69,6 @@ git clone --depth 1 --branch v0.23.4 https://github.com/NousResearch/hermes-agen
 cd hermes-agent && UV_PROJECT_ENVIRONMENT=/path/to/venv uv sync --frozen --no-dev --python 3.14
 cd -
 PYTHONPATH=../src /path/to/venv/bin/python bridge.py --check
+PYTHONPATH=../src:. /path/to/venv/bin/python -m unittest discover -s tests   # real mode against a stub upstream
 PYTHONPATH=../src python ../../testing/fake_kedi.py --bridge "/path/to/venv/bin/python bridge.py" ../../fixtures/v1/*.json
 ```

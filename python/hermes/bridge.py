@@ -14,6 +14,7 @@ import json
 import threading
 import uuid
 from typing import Any
+from urllib.parse import urlparse
 
 from kedi_bridge import ErrorCode, JsonObject, RpcError, Run, claim_stdout, serve
 
@@ -101,7 +102,6 @@ class Hermes:
             "liveInput": True,
             "interrupt": True,
             "sessions": True,
-            "usage": True,
             "testModel": True,
         },
     }
@@ -110,7 +110,7 @@ class Hermes:
     def run(self, run: Run) -> JsonObject:
         route = _model(run)
         scope = f"kedi-run-{run.id}"
-        gated = GATE.open(run)
+        gated = GATE.open(run, urlparse(route["base_url"] or "").hostname)
         token = CURRENT_RUN.set(run.id)
         tools: list[str] = []
         try:

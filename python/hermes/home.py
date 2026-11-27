@@ -6,6 +6,10 @@ user plugin, skill, memory or context file reaches a run, and the bridge's confi
 applies: no Tool Search bridge (Kedi's tools stay as Kedi rendered them), no automatic
 compression (Kedi's policy decides it), and no retries of side calls (each would be a request
 Kedi has to admit).
+
+``KEDI_HERMES_PROVIDERS`` names a YAML file with a ``providers:`` mapping, Hermes's named
+endpoints (``providers.<name>.api`` and ``api_key``), for local or private models:
+``> model: <name>/<model>``.
 """
 
 from __future__ import annotations
@@ -17,10 +21,6 @@ import tempfile
 from pathlib import Path
 
 CONFIG = """\
-model:
-  provider: custom
-  default: kedi
-  base_url: {test_base_url}
 plugins:
   enabled: []
   isolation: in_process
@@ -54,7 +54,16 @@ def prepare() -> Path:
     home = root / "home"
     hermes_home = home / ".hermes"
     hermes_home.mkdir(parents=True, exist_ok=True)
-    (hermes_home / "config.yaml").write_text(CONFIG.format(test_base_url=TEST_BASE_URL), "utf-8")
+    config = CONFIG
+    providers = os.environ.get("KEDI_HERMES_PROVIDERS")
+    if providers:
+        # Hermes's named endpoints (a providers: mapping), for local models: the user's own
+        # ~/.hermes/config.yaml is not read.
+        extra = Path(providers).read_text("utf-8")
+        if not extra.lstrip().startswith("providers:"):
+            raise SystemExit(f"KEDI_HERMES_PROVIDERS names {providers}, which must hold one providers: mapping")
+        config += "\n" + extra
+    (hermes_home / "config.yaml").write_text(config, "utf-8")
     os.environ["HOME"] = str(home)
     os.environ["HERMES_HOME"] = str(hermes_home)
     return hermes_home
