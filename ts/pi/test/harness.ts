@@ -10,7 +10,10 @@ import { type JsonObject, Peer, RpcError } from "../../sdk/src/peer.ts";
 import { piBridge } from "../pi.ts";
 
 export type Answers = Partial<
-  Record<"approval/request" | "budget/admit" | "hook/invoke" | "artifact/admit" | "history/process" | "media/get", (params: JsonObject) => JsonObject>
+  Record<
+    "approval/request" | "budget/admit" | "hook/invoke" | "artifact/admit" | "history/process" | "media/get" | "tool/call",
+    (params: JsonObject) => JsonObject
+  >
 >;
 
 export interface Exchange {
@@ -46,9 +49,14 @@ export async function exchange(options: {
     const { usage, ...reply } = options.model(outcome.seen);
     return { message: { role: "assistant", ...reply }, ...(usage ? { usage } : {}) };
   });
-  for (const method of ["approval/request", "budget/admit", "hook/invoke", "artifact/admit", "history/process", "media/get"] as const) {
+  for (const method of ["approval/request", "budget/admit", "hook/invoke", "artifact/admit", "history/process", "media/get", "tool/call"] as const) {
     kedi.onRequest(method, async (params) => {
-      outcome.steps.push(method === "hook/invoke" ? String(params.event) : method === "budget/admit" ? `admit ${params.dimension}` : method);
+      outcome.steps.push(
+        method === "hook/invoke" ? String(params.event)
+        : method === "budget/admit" ? `admit ${params.dimension}`
+        : method === "tool/call" ? `tool/call ${params.name}`
+        : method,
+      );
       const answer = options.answers?.[method];
       if (answer) return answer(params);
       if (method === "approval/request") return { decision: "allow" };
@@ -56,6 +64,7 @@ export async function exchange(options: {
       if (method === "artifact/admit") return { result: params.result as never };
       if (method === "history/process") return { messages: params.messages as never };
       if (method === "media/get") throw new RpcError(-32602, `no media ${params.ref}`);
+      if (method === "tool/call") return { ok: false, error: `no tool ${params.name}` };
       return params.event === "pre_tool_use" ? { decision: "continue" } : {};
     });
   }
