@@ -57,6 +57,8 @@ sys.path.insert(0, sys.argv[0].rsplit("/", 1)[0])
 runpy.run_path(sys.argv[0], run_name="__main__")
 """
 CALL = {"tool": "lookup", "arguments": {"city": "Lyon"}}
+# A stdio MCP server with one tool that changes something, as a Kedi `> mcp:` server.
+MCP = {"name": "stub", "transport": "stdio", "command": sys.executable, "args": [str(HERE / "mcp_server.py")], "env": {}}
 
 
 class Upstream:
@@ -118,7 +120,9 @@ class Upstream:
 class Kedi:
     """The bridge as a subprocess, and Kedi's side of the connection."""
 
-    def __init__(self, upstream: Upstream, *, request_limit: int | None = None, resending: bool = False) -> None:
+    def __init__(
+        self, upstream: Upstream, *, request_limit: int | None = None, resending: bool = False, approval: str = "allow"
+    ) -> None:
         self.directory = Path(tempfile.mkdtemp(prefix="kedi-fast-agent-test-"))
         command = [sys.executable, str(BRIDGE / "bridge.py")]
         if resending:
@@ -145,6 +149,7 @@ class Kedi:
         self.peer = Peer(self.process.stdout.fileno(), write)
         self.admissions: list[str] = []
         self.tool_calls: list[dict[str, Any]] = []
+        self.approvals: list[dict[str, Any]] = []
         self.left = request_limit
 
         def admit(params: dict[str, Any]) -> dict[str, Any]:
@@ -159,8 +164,13 @@ class Kedi:
             self.tool_calls.append(params)
             return {"ok": True, "result": "France"}
 
+        def approve(params: dict[str, Any]) -> dict[str, Any]:
+            self.approvals.append(params)
+            return {"decision": approval, **({"reason": "not today"} if approval == "deny" else {})}
+
         self.peer.on_request("budget/admit", admit)
         self.peer.on_request("tool/call", call)
+        self.peer.on_request("approval/request", approve)
         self.peer.start()
         self.peer.request("initialize", {"protocolVersion": 1, "client": {"name": "test"}}).result(timeout=120)
 
@@ -184,10 +194,10 @@ class Kedi:
 
 
 def converse(
-    replies: list[Any], *, request_limit: int | None = None, resending: bool = False, **params: Any
+    replies: list[Any], *, request_limit: int | None = None, resending: bool = False, approval: str = "allow", **params: Any
 ) -> tuple[dict[str, Any], Upstream, Kedi]:
     upstream = Upstream(replies)
-    kedi = Kedi(upstream, request_limit=request_limit, resending=resending)
+    kedi = Kedi(upstream, request_limit=request_limit, resending=resending, approval=approval)
     try:
         return kedi.run(**params), upstream, kedi
     finally:
@@ -236,6 +246,21 @@ class RealModeTests(unittest.TestCase):
         self.assertEqual(kedi.tool_calls[0]["arguments"], {"city": "Lyon"})
         self.assertEqual(kedi.admissions.count("request"), len(upstream.hits))
         self.assertIn("France", json.dumps(upstream.hits[1]["messages"][-1]))
+
+    def test_native_code_mode_calls_mcp_tools_from_code_only_through_kedis_approval(self) -> None:
+        code = {"tool": "exec_sandbox", "arguments": {"code": "r = await s1__ship(city='Lyon')\nprint(r)"}}
+        for decision, outcome in (("allow", "shipped to Lyon"), ("deny", "not today")):
+            with self.subTest(decision):
+                answer, upstream, kedi = converse(
+                    [code, TEXT], approval=decision, mcpServers=[MCP], codemode={"mode": "native"}
+                )
+                self.assertIn("result", answer, answer)
+                self.assertEqual([tool["function"]["name"] for tool in upstream.hits[0]["tools"]], ["exec_sandbox"])
+                self.assertEqual([approval["tool"] for approval in kedi.approvals], ["ship"])
+                self.assertEqual(kedi.approvals[0]["risk"], "mutating")
+                self.assertIn(outcome, json.dumps(upstream.hits[1]["messages"][-1]))
+                if decision == "deny":
+                    self.assertNotIn("shipped", json.dumps(upstream.hits[1]["messages"][-1]))
 
     def test_without_native_code_mode_the_code_tool_stays_off(self) -> None:
         _, upstream, _ = converse([TEXT], tools=[LOOKUP])

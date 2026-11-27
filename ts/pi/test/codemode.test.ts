@@ -2,9 +2,13 @@
 // makes takes Kedi's steps.
 
 import assert from "node:assert/strict";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import type { JsonObject } from "../../sdk/src/peer.ts";
 import { exchange } from "./harness.ts";
+
+const SERVER = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "mcp-server.mjs");
 
 const LOOKUP = {
   name: "lookup", description: "A city's country.", outputSchema: null, requiredBeforeOutput: false,
@@ -22,6 +26,8 @@ function scripted(seen: JsonObject[]): JsonObject {
 }
 
 const names = (request: JsonObject | undefined) => ((request?.tools ?? []) as { name: string }[]).map((tool) => tool.name);
+const described = (request: JsonObject | undefined) =>
+  String(((request?.tools ?? []) as { name: string; description?: string }[]).find((tool) => tool.name === "codemode")?.description);
 
 test("native code mode offers codemode, and a script's call of a Kedi tool goes through tool/call", async () => {
   const { result, steps, seen } = await exchange({
@@ -55,4 +61,24 @@ test("without native code mode, pi's codemode stays off and Kedi's tools are dec
   const { seen } = await exchange({ model: () => ({ parts: [{ type: "text", text: "Ready." }] }), run: { tools: [LOOKUP] } });
   assert.ok(names(seen[0]).includes("lookup"));
   assert.ok(!names(seen[0]).includes("codemode"));
+});
+
+test("native code mode lists every tool up front, an MCP server's too, and its calls take Kedi's steps", async () => {
+  const shouts = (seen: JsonObject[]): JsonObject =>
+    seen.length === 1
+      ? { parts: [{ type: "toolCall", id: "c1", name: "codemode", arguments: { code: "text(await tools.mcp__s1__shout({ text: 'hi' }));" } }] }
+      : { parts: [{ type: "text", text: JSON.stringify(seen.at(-1)!.messages).includes("HI") ? "shouted" : "silent" }] };
+  const approvals: JsonObject[] = [];
+  const { result, steps, seen } = await exchange({
+    model: shouts,
+    run: { tools: [LOOKUP], codemode: { mode: "native" }, mcpServers: [{ transport: "stdio", command: process.execPath, args: [SERVER] }] },
+    answers: { "approval/request": (params) => (approvals.push(params), { decision: "allow" }) },
+  });
+  assert.deepEqual(names(seen[0]).filter((name) => name === "lookup" || name.startsWith("mcp__")), []);
+  // Nothing waits behind searchTools(): Kedi's tool and the server's are in the description.
+  assert.match(described(seen[0]), /lookup/);
+  assert.match(described(seen[0]), /shout/);
+  assert.deepEqual([approvals[0]!.tool, approvals[0]!.origin], ["shout", "mcp"]);
+  assert.ok(steps.includes("admit toolAttempt"), steps.join(", "));
+  assert.equal(result?.text, "shouted");
 });

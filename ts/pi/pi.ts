@@ -71,15 +71,16 @@ const NATIVE_TOOLS: Record<string, "read_only" | "mutating" | "sensitive"> = {
 const MCP_RESOURCE_TOOLS = new Set(["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]);
 
 /**
- * A Kedi `> mcp:` server as pi's MCP configuration: its tools are declared to the model directly,
- * or, in native code mode, callable from codemode scripts only.
+ * A Kedi `> mcp:` server as pi's MCP configuration; its tools are declared to the model directly.
+ * In native code mode they stay direct: codemode's "only" mode lists direct tools in its
+ * description and takes them out of the model's declarations. pi's own `codemode` exposure would
+ * defer them behind `searchTools()` instead.
  */
-function mcpConfig(server: NonNullable<Run["params"]["mcpServers"]>[number], native: boolean): JsonObject {
-  const exposure = native ? "codemode" : "direct";
+function mcpConfig(server: NonNullable<Run["params"]["mcpServers"]>[number]): JsonObject {
   if (server.transport === "stdio") {
-    return { command: server.command ?? "", args: server.args ?? [], env: server.env ?? {}, exposure };
+    return { command: server.command ?? "", args: server.args ?? [], env: server.env ?? {}, exposure: "direct" };
   }
-  return { url: server.url ?? "", headers: server.headers ?? {}, exposure };
+  return { url: server.url ?? "", headers: server.headers ?? {}, exposure: "direct" };
 }
 
 /** In test mode pi needs a model and a credential, though no request leaves the bridge. */
@@ -313,14 +314,13 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
   let summarizing = false;
   // Native code mode: pi's codemode tool is the model's way to Kedi's tools, which only its
   // scripts call; each call still takes Kedi's steps.
-  const native = params.codemode?.mode === "native";
+  const codeMode = params.codemode?.mode === "native";
 
   const kediTools: ToolDefinition[] = params.tools.map((tool) => ({
     name: tool.name,
     label: tool.name,
     description: tool.description ?? "",
     parameters: (tool.inputSchema ?? { type: "object", properties: {} }) as never,
-    ...(native ? { exposure: "codemode" as const } : {}),
     async execute(toolCallId, args) {
       const outcome = await run.callTool(toolCallId, tool.name, args as JsonObject);
       const said = outcome.ok ? (typeof outcome.result === "string" ? outcome.result : JSON.stringify(outcome.result)) : outcome.error;
@@ -336,7 +336,7 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
       description: "Give your final answer by calling this tool with it.",
       parameters: output.schema as never,
       // The answer is the model's to give: scripts do not call it.
-      ...(native ? { exposure: "model-only" as const } : {}),
+      ...(codeMode ? { exposure: "model-only" as const } : {}),
       async execute(_id, args) {
         data = { value: args as Json };
         return { content: [{ type: "text", text: "Answer recorded." }], details: {}, terminate: true };
@@ -346,7 +346,7 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
 
   const turn = params.continuation ? params.continuation.message : await userTurn(params, run.signal);
   // Kedi's > mcp: servers, named s1, s2, … in order: pi names their tools mcp__s1__<tool>.
-  const servers = (params.mcpServers ?? []).map((server, index) => [`s${index + 1}`, mcpConfig(server, native)] as const);
+  const servers = (params.mcpServers ?? []).map((server, index) => [`s${index + 1}`, mcpConfig(server)] as const);
   const kedi = (pi: ExtensionAPI) => {
     for (const [name, config] of servers) pi.registerMcpServer(name, config as never);
     // Cache warming sends requests of its own, past the stream function Kedi admits; governed
@@ -454,7 +454,7 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
     // Kedi owns retries; pi compacts its session only under the program's policy.
     retry: { enabled: false, provider: { maxRetries: 0 } },
     // pi's codemode tool is registered inactive: native code mode turns it on.
-    ...(native ? { defaultTools: ["+codemode"] } : {}),
+    ...(codeMode ? { defaultTools: ["+codemode"] } : {}),
     compaction: compactionSettings(params.compaction, model),
     // No install report, and no attribution to pi: requests say they come from kedi-pi.
     enableInstallTelemetry: false,
@@ -472,9 +472,11 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
     noContextFiles: true,
     extensionFactories: [
       { name: "kedi", factory: kedi },
-      // pi's codemode, with no models of its own for scripts: a classifier or image model call
+      // pi's codemode in "only" mode: every direct tool (Kedi's and its servers') is listed in the
+      // codemode description, with no budget that would leave some to searchTools(), and taken
+      // out of the model's declarations. Scripts get no models: a classifier or image model call
       // would be a request Kedi never admitted.
-      ...(native ? [createCodemodeExtension({ mode: "only", models: false })] : []),
+      ...(codeMode ? [createCodemodeExtension({ mode: "only", inlineBudget: Number.POSITIVE_INFINITY, models: false })] : []),
       // pi's MCP client, with no configuration of its own: no mcp.json of this machine loads.
       ...(servers.length ? [createMcpExtension({ loadConfig: () => ({ servers: [], errors: [], autoEnableCodemode: false }) })] : []),
     ] as never,
