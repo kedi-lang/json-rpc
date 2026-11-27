@@ -92,11 +92,12 @@ VERSION = "0.1.0"
 SETTINGS =("temperature", "max_tokens", "top_p")
 EFFORT = ["minimal", "low", "medium", "high", "xhigh", "max"]
 # Kedi owns retries. fast-agent's programmatic tool calling (its code mode), on by default for
-# some model generations, stays off until Kedi asks for it; so does its automatic compaction,
-# the providers' in-request compaction included, unless the program's policy is native. MCP
-# servers get no sampling: their requests would be model requests of their own.
+# some model generations, stays off until a program asks for native code mode, and then offers
+# every function upfront, none behind search. Its automatic compaction, the providers'
+# in-request compaction included, stays off unless the program's policy is native. MCP servers
+# get no sampling: their requests would be model requests of their own.
 HOME_CONFIG = (
-    "llm_retries: 0\nptc:\n  enabled: false\ncompaction:\n  auto: false\n  strategy: client\n"
+    "llm_retries: 0\nptc:\n  enabled: false\n  search: false\ncompaction:\n  auto: false\n  strategy: client\n"
     "mcp:\n  client:\n    auto_sampling: false\n"
 )
 
@@ -574,6 +575,8 @@ class FastAgentBridge:
         "effort": EFFORT,
         # fast-agent compacts at an exact input-token threshold: the bridge decides when.
         "compaction": {"threshold": True},
+        # Its code mode: model-written Python in a sandbox (Monty) whose functions are Kedi's tools.
+        "codemode": {"language": "python"},
         "mcp": {"transports": ["stdio", "http", "sse"]},
         "capabilities": {
             "tools": True,
@@ -629,12 +632,10 @@ class FastAgentBridge:
                 servers = [f"s{index}" for index, _ in enumerate(run.params.get("mcpServers") or [], 1)]
                 for name, server in zip(servers, run.params.get("mcpServers") or []):
                     await agent.attach_mcp_server(server_name=name, server_config=_mcp_server(name, server))
-                # The model sees Kedi's tools and its servers' and nothing else: a tool fast-agent
-                # turns on by default (its code tool, subagents, image generation, ...) would escape Kedi.
-                offered = {tool.name for tool in (await agent.list_tools()).tools}
-                offered = {name for name in offered if name.split("__", 1)[0] not in servers}
-                if unexpected := offered - {spec["name"] for spec in run.params.get("tools") or []}:
-                    raise RpcError(ErrorCode.RUN_FAILED, f"fast-agent offers tools Kedi did not give: {', '.join(sorted(unexpected))}")
+                native = (run.params.get("codemode") or {}).get("mode") == "native"
+                if native:
+                    agent.restore_ptc(True)
+                await _check_tools(agent, run, servers, native=native)
                 history = await asyncio.to_thread(_history, run)
                 agent.load_message_history(history)
                 turn.loaded = turn.covered = len(history)
@@ -659,6 +660,27 @@ class FastAgentBridge:
                 return {**answer, **turn.back()}
         finally:
             CURRENT.reset(token)
+
+
+async def _check_tools(agent: Any, run: Run, servers: list[str], *, native: bool) -> None:
+    """The model sees Kedi's tools and its servers' and nothing else; with native code mode, only
+    the code tool, whose code reaches only those. A tool fast-agent turns on by default (its code
+    tool, subagents, image generation, ...) or a function of its own in the sandbox (shell,
+    files, ...) would escape Kedi."""
+    kedi = {spec["name"] for spec in run.params.get("tools") or []}
+
+    def given(name: str) -> bool:
+        return name in kedi or name.split("__", 1)[0] in servers
+
+    surface = await agent.tool_surface()
+    code_tool = surface.programmatic.tool_name if surface.programmatic is not None else None
+    if native and code_tool is None:
+        raise RpcError(ErrorCode.RUN_FAILED, "fast-agent could not turn its code mode on for this model")
+    offered = {tool.name for tool in (await agent.list_tools()).tools}
+    unexpected = {name for name in offered if not given(name) and not (native and name == code_tool)}
+    unexpected |= {function.tool.name for function in surface.programmatic_functions() if not given(function.tool.name)}
+    if unexpected:
+        raise RpcError(ErrorCode.RUN_FAILED, f"fast-agent offers tools Kedi did not give: {', '.join(sorted(unexpected))}")
 
 
 def _cancel_on_stop(run: Run, future: Future[Any]) -> None:

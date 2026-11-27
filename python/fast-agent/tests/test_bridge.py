@@ -227,6 +227,20 @@ class RealModeTests(unittest.TestCase):
         self.assertEqual(len(upstream.hits), 1)
         self.assertEqual(kedi.admissions.count("request"), 1)
 
+    def test_native_code_mode_calls_kedis_tools_from_code_only_through_kedi(self) -> None:
+        code = {"tool": "exec_sandbox", "arguments": {"code": "r = await lookup(city='Lyon')\nprint(r)"}}
+        answer, upstream, kedi = converse([code, TEXT], tools=[LOOKUP], codemode={"mode": "native"})
+        self.assertEqual(answer.get("result", {}).get("text"), "Lyon is in France.", answer)
+        self.assertEqual([tool["function"]["name"] for tool in upstream.hits[0]["tools"]], ["exec_sandbox"])
+        self.assertEqual([call["name"] for call in kedi.tool_calls], ["lookup"])
+        self.assertEqual(kedi.tool_calls[0]["arguments"], {"city": "Lyon"})
+        self.assertEqual(kedi.admissions.count("request"), len(upstream.hits))
+        self.assertIn("France", json.dumps(upstream.hits[1]["messages"][-1]))
+
+    def test_without_native_code_mode_the_code_tool_stays_off(self) -> None:
+        _, upstream, _ = converse([TEXT], tools=[LOOKUP])
+        self.assertEqual([tool["function"]["name"] for tool in upstream.hits[0]["tools"]], ["lookup"])
+
     def test_kedis_system_text_reaches_the_wire_as_written(self) -> None:
         system = "Keep {{currentDate}}, {{file:notes.txt}}, {{url:https://example.com/x}} and {{env}} as written."
         answer, upstream, _ = converse([TEXT], system=system)
