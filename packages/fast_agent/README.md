@@ -31,7 +31,7 @@ fast-agent 0.10.69). The manifest says `environment: uv`, and `kedi install` or 
 fast-agent's home lives in the package's `.kedi-runtime/`, not `~/.fast-agent`. `kedi remove
 fast_agent` takes all of it with the package. It needs:
 
-- Kedi 0.1.7 or newer: `pip install -U kedi`; native code mode (`> codemode: native`) needs
+- Kedi 0.1.7 or newer: `pip install -U kedi`; code mode (`> codemode: enabled`) needs
   Kedi 0.1.8;
 - uv: `kedi python install uv`;
 - about 0.3 GB of disk.

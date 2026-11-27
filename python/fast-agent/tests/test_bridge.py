@@ -237,9 +237,9 @@ class RealModeTests(unittest.TestCase):
         self.assertEqual(len(upstream.hits), 1)
         self.assertEqual(kedi.admissions.count("request"), 1)
 
-    def test_native_code_mode_calls_kedis_tools_from_code_only_through_kedi(self) -> None:
+    def test_code_mode_calls_kedis_tools_from_code_only_through_kedi(self) -> None:
         code = {"tool": "exec_sandbox", "arguments": {"code": "r = await lookup(city='Lyon')\nprint(r)"}}
-        answer, upstream, kedi = converse([code, TEXT], tools=[LOOKUP], codemode={"mode": "native"})
+        answer, upstream, kedi = converse([code, TEXT], tools=[LOOKUP], codemode=True)
         self.assertEqual(answer.get("result", {}).get("text"), "Lyon is in France.", answer)
         self.assertEqual([tool["function"]["name"] for tool in upstream.hits[0]["tools"]], ["exec_sandbox"])
         self.assertEqual([call["name"] for call in kedi.tool_calls], ["lookup"])
@@ -247,12 +247,12 @@ class RealModeTests(unittest.TestCase):
         self.assertEqual(kedi.admissions.count("request"), len(upstream.hits))
         self.assertIn("France", json.dumps(upstream.hits[1]["messages"][-1]))
 
-    def test_native_code_mode_calls_mcp_tools_from_code_only_through_kedis_approval(self) -> None:
+    def test_code_mode_calls_mcp_tools_from_code_only_through_kedis_approval(self) -> None:
         code = {"tool": "exec_sandbox", "arguments": {"code": "r = await s1__ship(city='Lyon')\nprint(r)"}}
         for decision, outcome in (("allow", "shipped to Lyon"), ("deny", "not today")):
             with self.subTest(decision):
                 answer, upstream, kedi = converse(
-                    [code, TEXT], approval=decision, mcpServers=[MCP], codemode={"mode": "native"}
+                    [code, TEXT], approval=decision, mcpServers=[MCP], codemode=True
                 )
                 self.assertIn("result", answer, answer)
                 self.assertEqual([tool["function"]["name"] for tool in upstream.hits[0]["tools"]], ["exec_sandbox"])
@@ -262,7 +262,7 @@ class RealModeTests(unittest.TestCase):
                 if decision == "deny":
                     self.assertNotIn("shipped", json.dumps(upstream.hits[1]["messages"][-1]))
 
-    def test_without_native_code_mode_the_code_tool_stays_off(self) -> None:
+    def test_with_code_mode_off_the_code_tool_stays_off(self) -> None:
         _, upstream, _ = converse([TEXT], tools=[LOOKUP])
         self.assertEqual([tool["function"]["name"] for tool in upstream.hits[0]["tools"]], ["lookup"])
 

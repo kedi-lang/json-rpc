@@ -38,7 +38,7 @@ suite("preflight", () => {
     assert.ok(report.passed.includes("governed-admits-each-request"));
     assert.ok(report.passed.includes("usage"));
     assert.deepEqual(report.skipped.map((skip) => skip.name), [
-      "codemode-native", "compaction", "events", "history-processing", "interrupt-session", "interrupt-transcript", "interrupt",
+      "codemode", "compaction", "events", "history-processing", "interrupt-session", "interrupt-transcript", "interrupt",
       "live-input", "media-input", "model-fallback", "structured", "transcript",
     ]);
   });

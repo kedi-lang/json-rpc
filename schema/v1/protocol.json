@@ -274,7 +274,7 @@
         "history": {"$ref": "#/$defs/Transcript"},
         "processHistory": {"type": "boolean"},
         "compaction": {"oneOf": [{"type": "null"}, {"type": "object", "required": ["mode", "threshold"], "additionalProperties": false, "properties": {"mode": {"enum": ["native", "disabled"]}, "threshold": {"oneOf": [{"type": "null"}, {"type": "integer", "minimum": 1}]}}}]},
-        "codemode": {"oneOf": [{"type": "null"}, {"type": "object", "required": ["mode"], "additionalProperties": false, "properties": {"mode": {"const": "native"}}}]},
+        "codemode": {"type": "boolean"},
         "subagent": {"$ref": "#/$defs/Subagent"},
         "hooks": {"type": "array", "items": {"$ref": "#/$defs/HookEvent"}},
         "mcpServers": {"type": "array", "items": {"$ref": "#/$defs/McpServer"}},

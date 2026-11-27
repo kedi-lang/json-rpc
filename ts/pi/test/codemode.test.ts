@@ -1,4 +1,4 @@
-// Native code mode: pi's codemode tool is the model's way to Kedi's tools, and each call a script
+// Code mode: pi's codemode tool is the model's way to Kedi's tools, and each call a script
 // makes takes Kedi's steps.
 
 import assert from "node:assert/strict";
@@ -29,10 +29,10 @@ const names = (request: JsonObject | undefined) => ((request?.tools ?? []) as { 
 const described = (request: JsonObject | undefined) =>
   String(((request?.tools ?? []) as { name: string; description?: string }[]).find((tool) => tool.name === "codemode")?.description);
 
-test("native code mode offers codemode, and a script's call of a Kedi tool goes through tool/call", async () => {
+test("code mode offers codemode, and a script's call of a Kedi tool goes through tool/call", async () => {
   const { result, steps, seen } = await exchange({
     model: scripted,
-    run: { tools: [LOOKUP], codemode: { mode: "native" } },
+    run: { tools: [LOOKUP], codemode: true },
     answers: { "tool/call": () => ({ ok: true, result: "France" }) },
   });
   assert.equal(result?.text, "Lyon is in France.", steps.join(", "));
@@ -49,7 +49,7 @@ test("a script's call of one of pi's own tools takes Kedi's approval", async () 
       : { parts: [{ type: "text", text: JSON.stringify(seen.at(-1)!.messages).includes("not today") ? "refused" : "read it" }] };
   const { result, steps } = await exchange({
     model: reads,
-    run: { tools: [LOOKUP], codemode: { mode: "native" } },
+    run: { tools: [LOOKUP], codemode: true },
     answers: { "approval/request": () => ({ decision: "deny", reason: "not today" }) },
   });
   assert.ok(steps.includes("approval/request"), steps.join(", "));
@@ -57,13 +57,13 @@ test("a script's call of one of pi's own tools takes Kedi's approval", async () 
   assert.equal(result?.text, "refused");
 });
 
-test("without native code mode, pi's codemode stays off and Kedi's tools are declared", async () => {
+test("with code mode off, pi's codemode stays off and Kedi's tools are declared", async () => {
   const { seen } = await exchange({ model: () => ({ parts: [{ type: "text", text: "Ready." }] }), run: { tools: [LOOKUP] } });
   assert.ok(names(seen[0]).includes("lookup"));
   assert.ok(!names(seen[0]).includes("codemode"));
 });
 
-test("native code mode lists every tool up front, an MCP server's too, and its calls take Kedi's steps", async () => {
+test("code mode lists every tool up front, an MCP server's too, and its calls take Kedi's steps", async () => {
   const shouts = (seen: JsonObject[]): JsonObject =>
     seen.length === 1
       ? { parts: [{ type: "toolCall", id: "c1", name: "codemode", arguments: { code: "text(await tools.mcp__s1__shout({ text: 'hi' }));" } }] }
@@ -71,7 +71,7 @@ test("native code mode lists every tool up front, an MCP server's too, and its c
   const approvals: JsonObject[] = [];
   const { result, steps, seen } = await exchange({
     model: shouts,
-    run: { tools: [LOOKUP], codemode: { mode: "native" }, mcpServers: [{ transport: "stdio", command: process.execPath, args: [SERVER] }] },
+    run: { tools: [LOOKUP], codemode: true, mcpServers: [{ transport: "stdio", command: process.execPath, args: [SERVER] }] },
     answers: { "approval/request": (params) => (approvals.push(params), { decision: "allow" }) },
   });
   assert.deepEqual(names(seen[0]).filter((name) => name === "lookup" || name.startsWith("mcp__")), []);

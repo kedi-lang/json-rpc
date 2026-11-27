@@ -91,8 +91,9 @@ answer and Kedi's correction, for the bridge to replay as the model's turn and a
 `run/cancel` stops a run; it answers with `-32003`. A run Kedi stopped itself (an exhausted
 budget, a denied step) gets `run/cancel` after Kedi answered the request that stopped it.
 
-**Native code mode** (with `codemode`). A run whose program asks for the backend's own code
-mode (`> codemode: native`) carries `codemode: {mode: "native"}`. The bridge then:
+**Code mode** (with `codemode`). A run whose program turns code mode on (`> codemode: enabled`)
+carries `codemode: true`: the backend's own code mode is the run's, as Kedi's CodeMode is on
+Kedi's own adapters. The bridge then:
 - turns its backend's code mode on for the run, and offers Kedi's tools to the model's code
   only, not as tools of their own;
 - sends each call the code makes as it would a direct one: Kedi's tools through `tool/call`,
@@ -100,7 +101,9 @@ mode (`> codemode: native`) carries `codemode: {mode: "native"}`. The bridge the
 - gives the code no file, process, network or environment of the machine except through
   those tools.
 
-Without the field, the backend's code mode stays off.
+Without the field, the backend's code mode stays off. Kedi's CodeMode settings (its search and
+execution limits) are not sent: Kedi refuses them for a bridge, whose sandbox has limits of its
+own.
 
 ## 6. Steps Kedi Decides
 

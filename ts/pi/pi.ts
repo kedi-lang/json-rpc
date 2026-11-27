@@ -72,7 +72,7 @@ const MCP_RESOURCE_TOOLS = new Set(["list_mcp_resources", "list_mcp_resource_tem
 
 /**
  * A Kedi `> mcp:` server as pi's MCP configuration; its tools are declared to the model directly.
- * In native code mode they stay direct: codemode's "only" mode lists direct tools in its
+ * With code mode on they stay direct: codemode's "only" mode lists direct tools in its
  * description and takes them out of the model's declarations. pi's own `codemode` exposure would
  * defer them behind `searchTools()` instead.
  */
@@ -312,9 +312,9 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
   let data: { value: Json } | undefined;
   // While pi compacts its session, its model request is the summary, not a turn.
   let summarizing = false;
-  // Native code mode: pi's codemode tool is the model's way to Kedi's tools, which only its
-  // scripts call; each call still takes Kedi's steps.
-  const codeMode = params.codemode?.mode === "native";
+  // Code mode: pi's codemode tool is the model's way to Kedi's tools, which only its scripts
+  // call; each call still takes Kedi's steps.
+  const codeMode = params.codemode === true;
 
   const kediTools: ToolDefinition[] = params.tools.map((tool) => ({
     name: tool.name,
@@ -453,7 +453,7 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
   const settingsManager = SettingsManager.inMemory({
     // Kedi owns retries; pi compacts its session only under the program's policy.
     retry: { enabled: false, provider: { maxRetries: 0 } },
-    // pi's codemode tool is registered inactive: native code mode turns it on.
+    // pi's codemode tool is registered inactive: the program's code mode turns it on.
     ...(codeMode ? { defaultTools: ["+codemode"] } : {}),
     compaction: compactionSettings(params.compaction, model),
     // No install report, and no attribution to pi: requests say they come from kedi-pi.

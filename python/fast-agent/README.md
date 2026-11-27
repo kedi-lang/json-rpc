@@ -50,11 +50,11 @@ fast-agent reads each provider's credentials from its environment variables (`GO
 - **What is off by default.** fast-agent turns some features on by default. The bridge's home
   turns them off:
   - programmatic tool calling (its code mode), which is on for the GPT-6 Astra, Sol, Terra and
-    Luna models, unless the program asks for native code mode;
+    Luna models, unless the program turns code mode on;
   - automatic compaction, the providers' in-request compaction included.
 
   A `ptc=` model query is refused.
-- **Native code mode.** With `> codemode: native`, the run turns fast-agent's code mode on:
+- **Code mode.** With `> codemode: enabled`, the run turns fast-agent's own code mode on:
   - the model gets one tool, `exec_sandbox`, and writes Python that runs in fast-agent's Monty
     sandbox;
   - Kedi's tools and its servers' tools are the sandbox's functions, all of them upfront;
@@ -63,7 +63,8 @@ fast-agent reads each provider's credentials from its environment variables (`GO
   - the sandbox has no file, shell, process, network or environment access.
 
   A run whose sandbox holds any other function is refused. The code tool's description is
-  fast-agent's own text.
+  fast-agent's own text. Kedi's CodeMode settings (`> codemode:` with search or execution
+  limits) do not apply to fast-agent's sandbox, so Kedi refuses them.
 - **Isolation.** The bridge gives fast-agent a home of its own. Installed as a Kedi package, the
   home is the package's runtime directory (`KEDI_PACKAGE_RUNTIME_DIR`). No user config, skill,
   plugin, card or session from `~/.fast-agent` reaches a run.
@@ -82,14 +83,13 @@ fast-agent reads each provider's credentials from its environment variables (`GO
 - **Settings:** `modelFallback`; `settings` (`temperature`, `max_tokens`, `top_p`); `effort`
   (`minimal` to `max`, as fast-agent's reasoning setting).
 - **Media:** `mediaInput` (images).
-- **Code:** `codemode` (`python`): `> codemode: native` runs fast-agent's own code mode.
+- **Code:** `codemode` (`python`): `> codemode: enabled` runs fast-agent's own code mode.
 
 It passes all 20 conformance fixtures.
 
 **Not supported:**
 - Copilot: its recovery writes prompts of its own.
 - Images or speech from the model.
-- Kedi's own CodeMode (`> codemode: enabled`): native code mode takes its place.
 
 Kedi refuses `tool_attempt_limit` in a profile with `> mcp:` servers.
 

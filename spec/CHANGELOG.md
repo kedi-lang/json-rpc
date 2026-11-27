@@ -23,5 +23,5 @@ Version 1 is experimental; these are the changes made while it is developed in
 - Native compaction: `compaction` `{threshold}` in `initialize`, `compaction` `{mode, threshold}`
   in session runs; `model/complete` carries `purpose` and may answer with `usage`
   (kedi-lang/kedi#197, phase 5).
-- Native code mode: `codemode` `{language}` in `initialize`, `codemode` `{mode: "native"}` in
-  runs whose program asks for the backend's own code mode.
+- Code mode: `codemode` `{language}` in `initialize`, `codemode: true` in runs whose program
+  turns code mode on (`> codemode: enabled`), which runs the backend's own.
