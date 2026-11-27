@@ -1,0 +1,63 @@
+name: hermes release
+
+# Tags a release commit, off main, that holds the Hermes bridge and the Python bridge SDK in the
+# package source (packages/hermes/assemble.sh): the Kedi package in packages/hermes then installs
+# from that tag, and a registry record can point at the tag's commit
+# (package_manifest_path: packages/hermes/package.kedi). Hermes itself is not in the package:
+# Kedi checks out the commit its environment_project names when the package is installed.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version in packages/hermes/package.kedi, such as 0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: The version is the manifest's, and not released yet
+        run: |
+          grep -qxF "  version: $VERSION" packages/hermes/package.kedi || {
+            echo "::error::packages/hermes/package.kedi does not declare version $VERSION"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/hermes-v$VERSION" >/dev/null; then
+            echo "::error::hermes-v$VERSION is already released"; exit 1
+          fi
+      - name: Hermes at the package's commit, installed as Kedi installs it
+        run: |
+          commit="$(sed -n 's|^      environment_project: git+https://github.com/NousResearch/hermes-agent@||p' packages/hermes/package.kedi)"
+          git init --quiet "$RUNNER_TEMP/hermes-agent"
+          git -C "$RUNNER_TEMP/hermes-agent" remote add origin https://github.com/NousResearch/hermes-agent
+          git -C "$RUNNER_TEMP/hermes-agent" fetch --quiet --depth 1 --no-tags origin "$commit"
+          git -C "$RUNNER_TEMP/hermes-agent" checkout --detach --quiet "$commit"
+          UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/hermes-venv" UV_PYTHON_PREFERENCE=only-managed \
+            uv sync --frozen --no-dev --project "$RUNNER_TEMP/hermes-agent"
+      - name: The assembled package passes the preflight
+        run: |
+          packages/hermes/assemble.sh
+          "$RUNNER_TEMP/hermes-venv/bin/python" packages/hermes/src/hermes/bridge.py --check
+      - name: Tag the release commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --detach
+          git add -f packages/hermes/src/hermes/bridge.py packages/hermes/src/hermes/convert.py \
+            packages/hermes/src/hermes/gate.py packages/hermes/src/hermes/home.py \
+            packages/hermes/src/hermes/kedi_bridge
+          git commit -q -m "hermes $VERSION: the bridge and the Python bridge SDK"
+          git tag -a "hermes-v$VERSION" -m "hermes $VERSION"
+          git push origin "hermes-v$VERSION"
+          {
+            echo "## hermes $VERSION"
+            echo
+            echo "- tag: \`hermes-v$VERSION\`"
+            echo "- verified_commit: \`$(git rev-parse HEAD)\`"
+            echo "- package_manifest_path: \`packages/hermes/package.kedi\`"
+          } >> "$GITHUB_STEP_SUMMARY"

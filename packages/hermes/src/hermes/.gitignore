@@ -1,0 +1,6 @@
+# Added by ../../assemble.sh and the release workflow; not kept on main.
+/bridge.py
+/convert.py
+/gate.py
+/home.py
+/kedi_bridge/

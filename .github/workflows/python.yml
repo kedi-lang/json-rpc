@@ -72,3 +72,12 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/python/src
           KEDI_BRIDGE_PREFLIGHT: "off"
+      - name: The Hermes package names the commit tested here
+        run: |
+          tested="$(git -C hermes-agent rev-parse HEAD)"
+          grep -qxF "      environment_project: git+https://github.com/NousResearch/hermes-agent@$tested" packages/hermes/package.kedi || {
+            echo "::error::packages/hermes/package.kedi does not name Hermes $tested, the commit tested here"; exit 1; }
+      - name: The assembled Hermes package passes the preflight
+        run: |
+          packages/hermes/assemble.sh
+          ${{ github.workspace }}/hermes-venv/bin/python packages/hermes/src/hermes/bridge.py --check

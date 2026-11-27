@@ -1,0 +1,10 @@
+> package: hermes:
+  version: 0.1.0
+  source: src/hermes
+  license: Apache-2.0
+  adapters:
+    hermes:
+      kind: agent
+      command: python bridge.py
+      environment: uv
+      environment_project: git+https://github.com/NousResearch/hermes-agent@8fc0374447313e276f6b9a2764bfc750190c966a

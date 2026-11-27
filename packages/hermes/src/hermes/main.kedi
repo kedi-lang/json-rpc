@@ -1,0 +1,5 @@
+# The hermes package: `> import: hermes`, then `> agent: hermes` runs Hermes Agent (Nous Research).
+#
+# The bridge (bridge.py and its modules) and the Python bridge SDK (kedi_bridge) are added by
+# the release workflow, or by assemble.sh; see
+# https://github.com/kedi-lang/json-rpc/tree/main/python/hermes.
