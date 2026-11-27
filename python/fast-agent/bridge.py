@@ -13,8 +13,9 @@ Kedi runs a program's turns on a fast-agent agent:
 - Kedi's tools are the agent's tools, called back through ``tool/call``, and the model sees no
   other tool.
 
-``> model:`` names a fast-agent model, such as ``google.gemini-3.1-flash-lite-preview``;
-``provider/model`` works too. Credentials come from the providers' environment variables.
+``> model:`` names a fast-agent provider and model as ``provider/model``, as everywhere in Kedi:
+``google/gemini-3.1-flash-lite-preview``. Credentials come from the providers' environment
+variables.
 """
 
 from __future__ import annotations
@@ -499,16 +500,19 @@ def kedi_tool(spec: JsonObject) -> KediTool:
 
 
 def _model_name(name: str) -> str:
-    """A Kedi model name as fast-agent's: ``provider/model`` becomes ``provider.model``."""
-    if "ptc=" in name.partition("?")[2]:
-        raise RpcError(ErrorCode.RUN_FAILED, "fast-agent's ptc model query is Kedi's to decide; remove it from > model:")
+    """A Kedi model name, ``provider/model``, as fast-agent's ``provider.model``."""
     provider, slash, model = name.partition("/")
-    if slash and provider in {p.config_name for p in Provider}:
-        name = f"{provider}.{model}"
-    if name.split(".", 1)[0] == "copilot":
+    if not slash or not model or provider not in {p.config_name for p in Provider}:
+        raise RpcError(
+            ErrorCode.RUN_FAILED,
+            f"fast-agent needs a model named provider/model, such as google/gemini-3.1-flash-lite-preview; got {json.dumps(name)}",
+        )
+    if provider == "copilot":
         # Copilot's recovery adds prompts of fast-agent's own; Kedi renders every model-visible text.
         raise RpcError(ErrorCode.RUN_FAILED, "fast-agent's Copilot provider writes prompts of its own; use another provider")
-    return name
+    if "ptc=" in model.partition("?")[2]:
+        raise RpcError(ErrorCode.RUN_FAILED, "fast-agent's ptc model query is Kedi's to decide; remove it from > model:")
+    return f"{provider}.{model}"
 
 
 def _model(run: Run) -> str:
@@ -516,7 +520,7 @@ def _model(run: Run) -> str:
         return "passthrough"  # replaced by KediTestLLM before any request
     name = run.params.get("model")
     if not name:
-        raise RpcError(ErrorCode.RUN_FAILED, "fast-agent needs a model, such as google.gemini-3.1-flash-lite-preview")
+        raise RpcError(ErrorCode.RUN_FAILED, "fast-agent needs a model, such as google/gemini-3.1-flash-lite-preview")
     return _model_name(name)
 
 

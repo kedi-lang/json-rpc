@@ -6,14 +6,14 @@
 ```kedi
 > import: fast_agent
 > agent: fast_agent
-> model: google.gemini-3.1-flash-lite-preview
+> model: google/gemini-3.1-flash-lite-preview
 [answer] << Reply with exactly one word: ready
 = <answer>
 ```
 
-`> model:` names a fast-agent model (`google.gemini-3.1-flash-lite-preview`,
-`sonnet`, ...). fast-agent reads the provider's credentials from its
-environment variables (`GOOGLE_API_KEY`, `OPENAI_API_KEY`, ...). See the
+`> model:` names a fast-agent provider and model as `provider/model`
+(`google/gemini-3.1-flash-lite-preview`, `anthropic/claude-haiku-4-5`, ...). fast-agent reads the
+provider's credentials from its environment variables (`GOOGLE_API_KEY`, `OPENAI_API_KEY`, ...). See the
 [bridge README](../../python/fast-agent/README.md) for providers, the model gate, tools, MCP and
 limits.
 

@@ -7,14 +7,15 @@ written with the [Python SDK](../README.md). It is tested with fast-agent **0.10
 ```kedi
 > agent: rpc:
     command: python /path/to/bridge.py
-> model: google.gemini-3.1-flash-lite-preview
+> model: google/gemini-3.1-flash-lite-preview
 ```
 
-`> model:` names a fast-agent model, such as `google.gemini-3.1-flash-lite-preview` or
-`sonnet`; `provider/model` works too. fast-agent reads each provider's
-credentials from its environment variables (`GOOGLE_API_KEY`, `OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, ...). `GENERIC_BASE_URL` points the `generic` provider at any
-OpenAI-compatible endpoint.
+`> model:` names a fast-agent provider and model as `provider/model`, as everywhere in Kedi:
+`google/gemini-3.1-flash-lite-preview`, `anthropic/claude-haiku-4-5`, `openrouter/<model>`. The
+bridge hands fast-agent its own `provider.model`; a name without a provider is refused.
+fast-agent reads each provider's credentials from its environment variables (`GOOGLE_API_KEY`,
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, ...). `GENERIC_BASE_URL` points the `generic` provider
+(`generic/<model>`) at any OpenAI-compatible endpoint.
 
 ## How it works
 

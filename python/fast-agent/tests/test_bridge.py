@@ -165,7 +165,7 @@ class Kedi:
         self.peer.request("initialize", {"protocolVersion": 1, "client": {"name": "test"}}).result(timeout=120)
 
     def run(self, **params: Any) -> dict[str, Any]:
-        future = self.peer.request("run", {**RUN, "runId": "r1", "model": "generic.stub-model", **params})
+        future = self.peer.request("run", {**RUN, "runId": "r1", "model": "generic/stub-model", **params})
         try:
             return {"result": future.result(timeout=120)}
         except Exception as error:  # noqa: BLE001 - the answer under test
@@ -234,8 +234,13 @@ class RealModeTests(unittest.TestCase):
         sent = upstream.hits[0]["messages"]
         self.assertEqual(sent[0], {"role": "system", "content": system})
 
+    def test_a_model_is_named_provider_slash_model_as_everywhere_in_kedi(self) -> None:
+        answer, upstream, _ = converse([TEXT], model="generic.stub-model")
+        self.assertIn("provider/model", answer.get("error", {}).get("message", ""), answer)
+        self.assertEqual(upstream.hits, [])
+
     def test_a_ptc_model_query_is_refused(self) -> None:
-        answer, upstream, _ = converse([TEXT], model="generic.stub-model?ptc=on")
+        answer, upstream, _ = converse([TEXT], model="generic/stub-model?ptc=on")
         self.assertIn("ptc", answer.get("error", {}).get("message", ""), answer)
         self.assertEqual(upstream.hits, [])
 
