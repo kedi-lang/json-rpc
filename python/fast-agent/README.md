@@ -3,7 +3,6 @@
 A Kedi JSON-RPC bridge for [fast-agent](https://fast-agent.ai) (evalstate/fast-agent, Apache-2.0),
 written with the [Python SDK](../README.md). It is tested with fast-agent **0.10.69**
 (`fast-agent-mcp` on PyPI). The [`fast_agent` package](../../packages/fast_agent) installs it.
-The bridge is not maintained: it gets no updates for later fast-agent versions.
 
 ```kedi
 > agent: rpc:

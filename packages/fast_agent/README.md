@@ -11,9 +11,6 @@
 = <answer>
 ```
 
-This package is not maintained. 0.1.0 is its one release, tested with fast-agent 0.10.69; it
-gets no updates for later fast-agent or Kedi versions.
-
 `> model:` names a fast-agent provider and model as `provider/model`
 (`google/gemini-3.1-flash-lite-preview`, `anthropic/claude-haiku-4-5`, ...). fast-agent reads the
 provider's credentials from its environment variables (`GOOGLE_API_KEY`, `OPENAI_API_KEY`, ...). See the

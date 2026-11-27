@@ -43,6 +43,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout --detach
+          # The preflight compiled the bridge: its bytecode is not part of the release.
+          find packages/fast_agent/src/fast_agent -name __pycache__ -prune -exec rm -rf {} +
           git add -f packages/fast_agent/src/fast_agent/bridge.py packages/fast_agent/src/fast_agent/convert.py \
             packages/fast_agent/src/fast_agent/kedi_bridge
           git commit -q -m "fast_agent $VERSION: the bridge and the Python bridge SDK"
