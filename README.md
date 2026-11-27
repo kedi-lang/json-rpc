@@ -32,9 +32,7 @@ The reference bridge for OpenAI-compatible endpoints ships with Kedi
 ## Status
 
 Protocol version 1 is experimental: it may change without a compatibility promise until
-Kedi marks it stable. Design and progress:
-[kedi-lang/kedi#197](https://github.com/kedi-lang/kedi/issues/197) (protocol),
-[#278](https://github.com/kedi-lang/kedi/issues/278) (TypeScript SDK).
+Kedi marks it stable.
 
 ## License
 

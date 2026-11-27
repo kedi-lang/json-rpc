@@ -1,9 +1,8 @@
 # Hermes Agent bridge
 
 A Kedi JSON-RPC bridge for [Hermes Agent](https://github.com/NousResearch/hermes-agent) (Nous
-Research, MIT), written with the [Python SDK](../README.md). Status: in progress
-([kedi-lang/kedi#197](https://github.com/kedi-lang/kedi/issues/197), phase 5 B). It is tested
-with Hermes **v0.23.4**.
+Research, MIT), written with the [Python SDK](../README.md). It is tested with Hermes
+**v0.23.4**.
 
 ```kedi
 > agent: rpc:
@@ -51,8 +50,8 @@ YAML file with Hermes's `providers:` mapping (`providers.<name>.api`, `api_key`)
 
 `tools`, `nativeToolCalling`, `structuredOutput`, `governed`, `subagents` (Kedi's children
 run as runs), `liveInput` (Hermes's steering: a user row after the current tool batch),
-`interrupt`, `sessions`, `testModel`. It passes 11 conformance fixtures and skips 8, for
-capabilities still to come:
+`interrupt`, `sessions`, `testModel`. It passes the conformance fixtures for these and skips
+the others. It does not have:
 - native tools, MCP and media input;
 - transcript mode and history processing;
 - events;
@@ -60,7 +59,7 @@ capabilities still to come:
   reports Hermes's totals instead;
 - compaction;
 - model fallback;
-- Hermes's own subagents (`delegate_task`), governed with `subagent/admit` (phase 5 B).
+- Hermes's own subagents (`delegate_task`).
 
 ## Development
 
