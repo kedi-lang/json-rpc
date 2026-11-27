@@ -97,6 +97,9 @@ class Hermes:
             "nativeToolCalling": True,
             "structuredOutput": True,
             "governed": True,
+            "subagents": True,
+            "liveInput": True,
+            "interrupt": True,
             "sessions": True,
             "usage": True,
             "testModel": True,
@@ -121,6 +124,10 @@ class Hermes:
                 finished = threading.Event()
                 threading.Thread(target=_stop_on_signal, args=(run, agent, finished), daemon=True).start()
                 history, user = _history(run)
+                so_far: list[JsonObject] = [*history, {"role": "user", "content": user}]
+                # Live input joins the turn as Hermes's steering: a user row after the current tool batch.
+                run.on_input(lambda texts: [agent.steer(text) for text in texts], on="arrival")
+                run.on_interrupt(lambda: {"state": {"messages": _conversation(getattr(agent, "_session_messages", None) or so_far)}})
                 try:
                     result = agent.run_conversation(user, system_message=run.params.get("system"), conversation_history=history, task_id=run.id)
                 finally:
@@ -160,10 +167,15 @@ def _answer(run: Run, result: JsonObject) -> JsonObject:
     else:
         answer = {"text": said}
     if run.params.get("session") is not None:
-        answer["state"] = {"messages": [message for message in result.get("messages") or [] if message.get("role") != "system"]}
+        answer["state"] = {"messages": _conversation(result.get("messages") or [])}
     counts = {"requests": result.get("api_calls"), "inputTokens": result.get("input_tokens"), "outputTokens": result.get("output_tokens"), "totalTokens": result.get("total_tokens")}
     answer["usage"] = {key: value for key, value in counts.items() if isinstance(value, int)}
     return answer
+
+
+def _conversation(messages: list[JsonObject]) -> list[JsonObject]:
+    """Hermes's messages as the session's state: the system prompt is rebuilt each turn."""
+    return [message for message in messages if message.get("role") != "system"]
 
 
 def _unfenced(text: str) -> str:

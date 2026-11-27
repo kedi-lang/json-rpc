@@ -43,11 +43,13 @@ does for its own sessions.
 
 ## Capabilities
 
-`tools`, `nativeToolCalling`, `structuredOutput`, `governed`, `sessions`, `usage`, `testModel`.
-It passes 9 conformance fixtures and skips 10, for capabilities still to come:
+`tools`, `nativeToolCalling`, `structuredOutput`, `governed`, `subagents` (Kedi's children
+run as runs), `liveInput` (Hermes's steering: a user row after the current tool batch),
+`interrupt`, `sessions`, `usage`, `testModel`. It passes 12 conformance fixtures and skips 7, for
+capabilities still to come:
 - native tools, MCP and media input;
 - transcript mode and history processing;
-- live input and interrupts;
+- events;
 - compaction;
 - model fallback;
 - Hermes's own subagents (`delegate_task`), governed with `subagent/admit` (phase 5 B).
