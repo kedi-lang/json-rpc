@@ -30,7 +30,7 @@ manifest says so (`environment: uv` with `environment_project:`), and `kedi inst
 Hermes's home lives in the package's `.kedi-runtime/`, not `~/.hermes`. `kedi remove hermes` takes
 all of it with the package. It needs:
 
-- Kedi with `environment_project`;
+- Kedi 0.1.7 or newer: `pip install -U kedi`;
 - uv: `kedi python install uv`;
 - git;
 - about 0.5 GB of disk.
