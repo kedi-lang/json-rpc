@@ -5,7 +5,7 @@
 // tools (read, bash, edit, write) take Kedi's hooks, approval and budgets through an inline
 // extension; Kedi's tools are pi custom tools that call back into Kedi.
 
-import type { Bridge, Json, JsonObject, ModelCall, Run, RunAnswer, TranscriptMessage, TranscriptPart } from "../sdk/src/index.ts";
+import type { Bridge, Compaction, Json, JsonObject, ModelCall, Run, RunAnswer, TokenCounts, TranscriptMessage, TranscriptPart } from "../sdk/src/index.ts";
 import { RpcError } from "../sdk/src/peer.ts";
 import {
   createAgentSession,
@@ -234,7 +234,7 @@ function describe(context: { messages: Message[] }): ModelCall {
   };
 }
 
-function fromKedi(message: TranscriptMessage, model: Model<any>): AssistantMessage {
+function fromKedi(message: TranscriptMessage, model: Model<any>, counts: TokenCounts = {}): AssistantMessage {
   const content: AssistantMessage["content"] = [];
   for (const part of message.parts) {
     if (part.type === "text") content.push({ type: "text", text: part.text });
@@ -247,7 +247,14 @@ function fromKedi(message: TranscriptMessage, model: Model<any>): AssistantMessa
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    usage: {
+      input: counts.inputTokens ?? 0,
+      output: counts.outputTokens ?? 0,
+      cacheRead: counts.cacheReadTokens ?? 0,
+      cacheWrite: counts.cacheWriteTokens ?? 0,
+      totalTokens: counts.totalTokens ?? (counts.inputTokens ?? 0) + (counts.outputTokens ?? 0),
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
     stopReason: content.some((part) => part.type === "toolCall") ? "toolUse" : "stop",
     timestamp: Date.now(),
   };
@@ -297,6 +304,8 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
   // The first error a Kedi step raised inside pi: pi turns errors into messages, the run fails with it.
   let failure: unknown;
   let data: { value: Json } | undefined;
+  // While pi compacts its session, its model request is the summary, not a turn.
+  let summarizing = false;
 
   const kediTools: ToolDefinition[] = params.tools.map((tool) => ({
     name: tool.name,
@@ -357,6 +366,18 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
         return restored ? { messages } : undefined;
       });
     }
+    // pi's native compaction: its summary request is admitted and counted like any request,
+    // but it is no turn of the run.
+    pi.on("session_before_compact", async () => {
+      summarizing = true;
+      return undefined;
+    });
+    pi.on("session_compact", async () => {
+      summarizing = false;
+    });
+    pi.on("session_compact_failed", async () => {
+      summarizing = false;
+    });
     pi.on("before_agent_start", async (event) => {
       // Kedi's system text follows pi's own prompt.
       if (params.system) return { systemPrompt: `${event.systemPrompt}\n\n${params.system}` };
@@ -419,9 +440,9 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
   };
 
   const settingsManager = SettingsManager.inMemory({
-    // Kedi owns retries and history: pi neither retries nor compacts on its own.
+    // Kedi owns retries; pi compacts its session only under the program's policy.
     retry: { enabled: false, provider: { maxRetries: 0 } },
-    compaction: { enabled: false },
+    compaction: compactionSettings(params.compaction, model),
     // No install report, and no attribution to pi: requests say they come from kedi-pi.
     enableInstallTelemetry: false,
   } as never);
@@ -490,9 +511,11 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
     if (failure !== undefined) return replay(failed(requestModel, failure, true));
     const system = context.messages.filter((message) => message.role === "system");
     const conversation = context.messages.filter((message) => message.role !== "system");
+    const turn = !summarizing;
     let sent = context;
     const answered = run
       .modelRequest<AssistantMessage>({
+        purpose: turn ? "turn" : "compaction",
         async send(name, signal) {
           // A fallback model is pi's to resolve, and its provider's credentials with it.
           const fallback = name !== null && name !== params.model;
@@ -505,10 +528,10 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
             ...sampling,
             signal: AbortSignal.any([signal, ...(options?.signal ? [options.signal] : [])]),
           });
-          // The model's text as it streams, for Kedi's event observers.
+          // The model's text as it streams, for Kedi's event observers; a summary is not theirs.
           const messageId = `${run.id}-${replies + 1}`;
           for await (const event of stream) {
-            if (event.type === "text_delta") run.event("message.delta", { messageId, text: event.delta });
+            if (turn && event.type === "text_delta") run.event("message.delta", { messageId, text: event.delta });
           }
           const message = await stream.result();
           // pi reports a failed request as a message; it fails here so the next model is tried.
@@ -528,7 +551,7 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
               },
             }
           : {}),
-        reply: (message) => fromKedi(message, requestModel),
+        reply: (message, counts) => fromKedi(message, requestModel, counts),
         usage: (message) => ({
           inputTokens: message.usage.input,
           outputTokens: message.usage.output,
@@ -538,6 +561,7 @@ async function converse(run: Run, cwd: string): Promise<RunAnswer> {
         }),
       })
       .then((message) => {
+        if (!turn) return message;
         replies += 1;
         const said = text(message);
         if (said) {
@@ -605,6 +629,23 @@ async function close(session: Awaited<ReturnType<typeof createAgentSession>>["se
   session.dispose();
 }
 
+/**
+ * Kedi's compaction policy as pi's settings: off unless native. A threshold is pi's reserve below
+ * the model's context window, and keeps at most half of it as recent context.
+ */
+export function compactionSettings(policy: Compaction | null | undefined, model: Pick<Model<any>, "id" | "contextWindow">): JsonObject {
+  if (policy?.mode !== "native") return { enabled: false };
+  if (policy.threshold === null) return { enabled: true };
+  if (policy.threshold >= model.contextWindow) {
+    throw new Error(`compaction threshold ${policy.threshold} is not below ${model.id}'s context window of ${model.contextWindow} tokens`);
+  }
+  return {
+    enabled: true,
+    reserveTokens: model.contextWindow - policy.threshold,
+    keepRecentTokens: Math.min(20_000, Math.max(1, Math.floor(policy.threshold / 2))),
+  };
+}
+
 /** The run's `> settings:` as pi's request options: the ones every pi provider applies alike. */
 export function streamSettings(settings: JsonObject | undefined): { temperature?: number; maxTokens?: number } {
   const options: { temperature?: number; maxTokens?: number } = {};
@@ -647,6 +688,8 @@ export function piBridge(options: PiBridgeOptions): Bridge {
       settings: ["temperature", "max_tokens"],
       // pi connects stdio and streamable HTTP servers; it refuses SSE.
       mcp: { transports: ["stdio", "http"] },
+      // pi compacts its session natively, at an exact threshold through its reserve tokens.
+      compaction: { threshold: true },
       effort: ["minimal", "low", "medium", "high", "xhigh", "max"],
       capabilities: {
         tools: true,

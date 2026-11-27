@@ -150,7 +150,11 @@ def _exercise(bridge: Bridge, fixture: dict[str, Any], outcome: Outcome) -> None
         "initialize", {"protocolVersion": 1, "client": {"name": "fake-kedi"}, "testModel": True}
     )
     handshake = _answer_to(bridge, hello)
-    capabilities = handshake["result"]["capabilities"]
+    capabilities = dict(handshake["result"]["capabilities"])
+    # What the handshake declares beside its capabilities: compaction, with a threshold.
+    compaction = handshake["result"].get("compaction")
+    capabilities["compaction"] = compaction is not None
+    capabilities["compactionThreshold"] = bool(compaction and compaction.get("threshold"))
     missing = [name for name in fixture.get("capabilities", []) if not capabilities.get(name)]
     if not capabilities.get("testModel"):
         missing.insert(0, "testModel")
@@ -161,6 +165,9 @@ def _exercise(bridge: Bridge, fixture: dict[str, Any], outcome: Outcome) -> None
     params.setdefault("user", "Hello.")
     run_id = bridge.request("run", params)
     script = list(fixture.get("model", []))
+    summaries = list(fixture.get("summaries", []))
+    summarized: list[dict[str, Any]] = []
+    requests_admitted = 0
     actions = {int(index): steps for index, steps in fixture.get("onModelRequest", {}).items()}
     budget = dict(fixture.get("budget", {}))
     tools = fixture.get("tools", {})
@@ -171,9 +178,17 @@ def _exercise(bridge: Bridge, fixture: dict[str, Any], outcome: Outcome) -> None
         if method is None:
             if message.get("id") == run_id:
                 _check_expect(fixture.get("expect", {}), message, seen, bridge.frames, outcome)
+                if fixture.get("expect", {}).get("compacted"):
+                    _check_compaction(fixture, capabilities, seen, summarized, requests_admitted, bridge.frames, outcome)
                 return
             continue
-        if method == "model/complete":
+        if method == "model/complete" and message["params"].get("purpose") == "compaction":
+            summarized.append(message["params"])
+            reply = dict(summaries.pop(0) if summaries else {"parts": [{"type": "text", "text": "A summary."}]})
+            usage = reply.pop("usage", None)
+            result = {"message": {"role": "assistant", **reply}, **({"usage": usage} if usage else {})}
+            bridge.send({"id": message["id"], "result": result})
+        elif method == "model/complete":
             seen.append(message["params"])
             for action in actions.get(len(seen), []):
                 _act(bridge, action, run_id)
@@ -181,8 +196,10 @@ def _exercise(bridge: Bridge, fixture: dict[str, Any], outcome: Outcome) -> None
                 down = {"code": -32002, "message": f"model {message['params']['model']} is down"}
                 bridge.send({"id": message["id"], "error": down})
                 continue
-            reply = script.pop(0) if script else {"parts": [{"type": "text", "text": "done"}]}
-            bridge.send({"id": message["id"], "result": {"message": {"role": "assistant", **reply}}})
+            reply = dict(script.pop(0) if script else {"parts": [{"type": "text", "text": "done"}]})
+            usage = reply.pop("usage", None)
+            result = {"message": {"role": "assistant", **reply}, **({"usage": usage} if usage else {})}
+            bridge.send({"id": message["id"], "result": result})
         elif method == "budget/admit":
             dimension = message["params"]["dimension"]
             left = budget.get(dimension)
@@ -193,6 +210,7 @@ def _exercise(bridge: Bridge, fixture: dict[str, Any], outcome: Outcome) -> None
             else:
                 if left is not None:
                     budget[dimension] = left - 1
+                requests_admitted += dimension == "request"
                 bridge.send({"id": message["id"], "result": {"admitted": True}})
         elif method == "tool/call":
             answer = tools.get(message["params"]["name"], {"error": "unknown tool"})
@@ -250,6 +268,30 @@ def _contains(actual: Any, expected: Any) -> bool:
             key in actual and _contains(actual[key], value) for key, value in expected.items()
         )
     return actual == expected
+
+
+def _check_compaction(
+    fixture: dict[str, Any],
+    capabilities: dict[str, Any],
+    seen: list[dict[str, Any]],
+    summarized: list[dict[str, Any]],
+    admitted: int,
+    frames: list[tuple[str, dict[str, Any]]],
+    outcome: Outcome,
+) -> None:
+    """A compacted run: a summary request reached Kedi, admitted, and no event reported it."""
+
+    if not summarized:
+        outcome.problems.append("no summary request (model/complete with purpose compaction) reached Kedi")
+    if capabilities.get("governed") and admitted != len(seen) + len(summarized):
+        outcome.problems.append(
+            f"{admitted} requests admitted, for {len(seen)} turn and {len(summarized)} summary requests: each needs budget/admit"
+        )
+    texts = [frame.get("params", {}).get("text") for side, frame in frames if side == "bridge" and frame.get("method") == "run/event"]
+    for summary in fixture.get("summaries", []):
+        said = json.dumps(summary["parts"])
+        if any(isinstance(text, str) and text and text in said for text in texts):
+            outcome.problems.append("a run/event reported the summary request's text: a summary is no turn of the run")
 
 
 def _check_expect(

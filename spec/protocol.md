@@ -69,7 +69,9 @@ needs it. A bridge must advertise only what it implements.
 
 `initialize` also lists `mediaKinds`, the `settings` names and `effort` levels the backend
 applies (never Kedi's own settings: `context_limit`, `media_limit`, `request_retries`,
-`tool_reason`, `voice`), and `mcp.transports`, which needs `nativeTools`.
+`tool_reason`, `voice`), and `mcp.transports`, which needs `nativeTools`. `compaction`
+`{threshold}` says the backend compacts its session natively, which needs `sessions`;
+`threshold` says whether it honors an exact input-token threshold (§7).
 
 ## 5. Runs
 
@@ -126,6 +128,21 @@ Kedi uses transcript mode for an `agent-framework`, and for an `agent-harness` o
 program needs Kedi's copy (history processing, replay). `history` travels in every run, so
 a long conversation counts against the 8 MiB frame.
 
+**Compaction** (with `compaction`, state mode only). A run with a `session` carries
+`compaction: {mode, threshold}` when the program sets a policy.
+- **`native`.** Compact the session as the backend does. When `threshold` is set, compact
+  once the context passes that many input tokens. The answer's `state` is then the
+  compacted session.
+- **`disabled`, or no `compaction` field.** Keep the backend's automatic compaction off.
+
+A summary request is a model request:
+- it is admitted (`budget/admit`) and counted (`run/usage`) like any other;
+- in test mode it goes as `model/complete` with `purpose: "compaction"`;
+- it is no turn of the run, so it carries no live input and no `run/event` reports it.
+
+Kedi refuses a `threshold` the bridge cannot honor, and native compaction in a program that
+processes or replays history, before any model I/O.
+
 ## 8. Children and Live Input
 
 With `subagents`, Kedi runs its children on the bridge as runs whose `subagent` names the
@@ -152,7 +169,10 @@ the run's `usage` is then ignored. A governed bridge's requests are counted at
 With `testModel`, Kedi may ask in `initialize` for test mode. The bridge then sends each
 model request, admitted as usual, as `model/complete`, with the conversation in Kedi's
 schema (media may be inline), the system text, the tools and the output, and treats
-Kedi's `message` as its model's reply.
+Kedi's `message` as its model's reply. `purpose` is `compaction` for a summary request (§7)
+and `turn` otherwise. The answer may carry `usage`, the counts the model would have
+reported; the bridge takes them as its model's, so tests can drive thresholds and token
+limits.
 
 ## 11. Errors
 

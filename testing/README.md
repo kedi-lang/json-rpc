@@ -22,12 +22,13 @@ A fixture is a JSON file:
 |---|---|
 | `name`, `description` | what it checks |
 | `code`, `failure`, `help`, `spec` | the diagnostic a failure reports: its stable code, what is wrong, how to fix it, and the spec section |
-| `capabilities` | what the bridge must declare for the fixture to run |
+| `capabilities` | what the bridge must declare for the fixture to run; besides the capabilities, `compaction` and `compactionThreshold` name the handshake's `compaction` (with `threshold: true`) |
 | `run` | `run` params; the fake Kedi fills in the rest (`user` defaults to `Hello.`) |
 | `model` | the test model's replies, in order: assistant messages in Kedi's transcript schema (`{"parts": [...]}`); `done` once they run out |
 | `tools` | Kedi's tools: `{"name": {"result": ...}}` or `{"name": {"error": "..."}}` for `tool/call` |
 | `budget` | admissions left per `budget/admit` dimension (`request`, `toolAttempt`); then denied |
 | `failModels` | models whose `model/complete` fails, as a model endpoint that is down |
+| `summaries` | replies to summary requests (`model/complete` with `purpose: "compaction"`), apart from `model`; a reply in either may carry `usage` |
 | `historyProcess` | how `history/process` answers: `{"keepLast": N}` keeps the newest N messages |
 | `onModelRequest` | what the fake Kedi sends when model request N arrives, before answering it: `{"N": [{"send": "run/input", "items": [...]}]}`, `run/interrupt`, `run/cancel` |
 | `expect` | what must hold once the run answers (below) |
@@ -42,6 +43,7 @@ A fixture is a JSON file:
 | `modelRequests` | the bridge sent this many model requests |
 | `modelSaw` | model request N carried a string containing this text |
 | `modelMissed` | model request N carried no string containing this text |
+| `compacted` | a summary request reached Kedi, each request was admitted (with `governed`), and no `run/event` reported the summary |
 | `events` | for each entry, a `run/event` notification contains these fields |
 | `order` | the bridge's requests include these methods in this order |
 | `count` | the bridge sent this method this many times |

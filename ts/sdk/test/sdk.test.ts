@@ -38,7 +38,7 @@ suite("preflight", () => {
     assert.ok(report.passed.includes("governed-admits-each-request"));
     assert.ok(report.passed.includes("usage"));
     assert.deepEqual(report.skipped.map((skip) => skip.name), [
-      "events", "history-processing", "interrupt-session", "interrupt-transcript", "interrupt",
+      "compaction", "events", "history-processing", "interrupt-session", "interrupt-transcript", "interrupt",
       "live-input", "media-input", "model-fallback", "structured", "transcript",
     ]);
   });
@@ -184,5 +184,44 @@ suite("serve", () => {
     assert.match(stderr, /raw stdout write/);
     assert.match(stderr, /harness log during a run/);
     assert.deepEqual(JSON.parse(stdout[1]!).result, { text: "real model" });
+  });
+});
+
+suite("model requests", () => {
+  test("a summary request is admitted and tagged, takes no history processing, and gets its counts", async () => {
+    const { PassThrough } = await import("node:stream");
+    const { connect } = await import("../src/connection.ts");
+    const { Peer } = await import("../src/peer.ts");
+    const bridge = {
+      handshake: { ...minimal({ testModel: true }).handshake, capabilities: { governed: true, sessions: true, testModel: true } },
+      async run(run: import("../src/run.ts").Run) {
+        const reply = await run.modelRequest({
+          purpose: "compaction",
+          send: async () => ({ text: "unused", counts: {} }),
+          describe: () => ({ system: "Summarize.", messages: [], tools: [], output: null }),
+          reply: (message, counts) => ({ text: (message.parts[0] as { text: string }).text, counts: counts ?? {} }),
+        });
+        return { text: JSON.stringify(reply) };
+      },
+    };
+    const toBridge = new PassThrough();
+    const fromBridge = new PassThrough();
+    const connection = connect(bridge as never, toBridge, { write: (frame: string) => fromBridge.write(frame) });
+    const kedi = new Peer(fromBridge, { write: (frame: string) => toBridge.write(frame) });
+    const asked: string[] = [];
+    kedi.onRequest("budget/admit", async (params) => (asked.push(`admit ${params.dimension}`), { admitted: true }));
+    kedi.onRequest("history/process", async () => (asked.push("history/process"), { messages: [] }));
+    kedi.onRequest("model/complete", async (params) => {
+      asked.push(`model/complete ${params.purpose}`);
+      return { message: { role: "assistant", parts: [{ type: "text", text: "A summary." }] }, usage: { inputTokens: 7 } };
+    });
+    await kedi.request("initialize", { protocolVersion: 1, client: { name: "test" }, testModel: true });
+    const run = { runId: "r", callKind: "invoke", promptKind: "raw", model: "m", system: null, instructionParts: [], user: "Hi.", userContent: null, output: null, tools: [], continuation: null, session: null, subagent: null, processHistory: true };
+    const answer = await kedi.request("run", run);
+    toBridge.end();
+    fromBridge.end();
+    await connection.closed;
+    assert.deepEqual(JSON.parse(String(answer.text)), { text: "A summary.", counts: { inputTokens: 7 } });
+    assert.deepEqual(asked, ["admit request", "model/complete compaction"]);
   });
 });

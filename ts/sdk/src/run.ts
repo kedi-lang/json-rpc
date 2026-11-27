@@ -6,6 +6,7 @@ import type {
   HookEvent,
   ModelCall,
   RunParams,
+  TokenCounts,
   ToolOrigin,
   ToolOutcome,
   ToolRisk,
@@ -49,8 +50,13 @@ export interface ModelRequest<Reply> {
   send(model: string | null, signal: AbortSignal): Promise<Reply>;
   /** The request in Kedi's transcript schema: test mode sends it as `model/complete`. */
   describe(): ModelCall;
-  /** Kedi's test-model message as the backend's reply. */
-  reply(message: TranscriptMessage): Reply;
+  /** Kedi's test-model message as the backend's reply, with the counts its model reports. */
+  reply(message: TranscriptMessage, usage?: TokenCounts): Reply;
+  /**
+   * `compaction` for the summary request of native compaction: admitted and counted like any
+   * request, but no turn of the run, so it hands over no live input and confirms none.
+   */
+  purpose?: "turn" | "compaction";
   /** The reply's token counts, for `run/usage`. */
   usage?(reply: Reply): Usage | undefined;
   /**
@@ -130,14 +136,15 @@ export class Run {
    */
   async modelRequest<Reply>(request: ModelRequest<Reply>): Promise<Reply> {
     this.#throwIfStopped();
-    if (this.#queued.length) {
+    const turn = request.purpose !== "compaction";
+    if (turn && this.#queued.length) {
       // Input not handed over stays queued, and the run's end answers it undelivered.
       if (!this.#onInput) {
         throw new BridgeUsageError("KB201", "live input arrived, but the run has no run.onInput handler");
       }
       this.#hand();
     }
-    if (this.params.processHistory) {
+    if (turn && this.params.processHistory) {
       if (!request.history) {
         throw new BridgeUsageError("KB202", "the run asks for history processing; the request has no history");
       }
@@ -148,7 +155,7 @@ export class Run {
     let failure: unknown;
     for (const model of models) {
       if (this.#capabilities.governed) await this.admit("request");
-      this.#confirmCarried(request);
+      if (turn) this.#confirmCarried(request);
       try {
         const reply = this.testMode ? await this.#testReply(request, model) : await this.#race(request.send(model, this.signal));
         // With usage, every model request is reported; counts the reply lacks stay unknown.
@@ -333,8 +340,10 @@ export class Run {
 
   async #testReply<Reply>(request: ModelRequest<Reply>, model: string | null): Promise<Reply> {
     const call = request.describe();
-    const answer = await this.#ask("model/complete", { runId: this.id, model, ...(call as unknown as JsonObject) });
-    return request.reply(answer.message as unknown as TranscriptMessage);
+    const params: JsonObject = { runId: this.id, model, ...(call as unknown as JsonObject) };
+    if (request.purpose) params.purpose = request.purpose;
+    const answer = await this.#ask("model/complete", params);
+    return request.reply(answer.message as unknown as TranscriptMessage, answer.usage as TokenCounts | undefined);
   }
 
   #ask(method: string, params: JsonObject): Promise<JsonObject> {

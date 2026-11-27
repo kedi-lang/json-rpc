@@ -20,3 +20,6 @@ Version 1 is experimental; these are the changes made while it is developed in
 - History processing: `processHistory`, `history/process`, `transcript` answers (kedi#284).
 - Test model: `testModel`, `model/complete` (kedi#285).
 - This specification and the JSON Schema move to kedi-lang/json-rpc.
+- Native compaction: `compaction` `{threshold}` in `initialize`, `compaction` `{mode, threshold}`
+  in session runs; `model/complete` carries `purpose` and may answer with `usage`
+  (kedi-lang/kedi#197, phase 5).

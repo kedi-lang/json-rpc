@@ -81,6 +81,12 @@ export interface RunParams {
   session: { id: string; turn: number; state: Json } | null;
   history?: TranscriptMessage[];
   processHistory?: boolean;
+  /**
+   * With a session, when the bridge declared `compaction`: the program's policy. `native`
+   * compacts the session as the backend does, at `threshold` input tokens when set; without
+   * it, keep the backend's automatic compaction off.
+   */
+  compaction?: Compaction | null;
   subagent: {
     id: string | null;
     parentRunId: string | null;
@@ -106,6 +112,20 @@ export type RunAnswer = ({ text: string } | { data: Json } | { content: ContentP
   /** Transcript mode with history processing: the whole conversation after the turn. */
   transcript?: TranscriptMessage[];
 };
+
+export interface Compaction {
+  mode: "native" | "disabled";
+  threshold: number | null;
+}
+
+/** Token counts a model reports for one request; a count left out is unknown. */
+export interface TokenCounts {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}
 
 /** One model request in Kedi's transcript schema, as `model/complete` carries it. */
 export interface ModelCall {

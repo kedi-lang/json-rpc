@@ -37,6 +37,8 @@ export interface Handshake {
   /** The `> effort:` levels the backend maps. */
   effort?: EffortLevel[];
   mcp?: { transports: McpTransport[] };
+  /** The backend compacts its session natively (needs `sessions`); `threshold`: it honors an exact one. */
+  compaction?: { threshold: boolean };
 }
 
 const KNOWN_CAPABILITIES = new Set<string>([
@@ -87,6 +89,16 @@ export function checkHandshake(handshake: Handshake): Diagnostic[] {
       title: "mcp is declared without nativeTools",
       detail: ["MCP tools are the bridge's own: their calls need hook/invoke, approval/request and artifact/admit"],
       help: "declare nativeTools and take MCP calls through those steps, or drop mcp",
+      docs: docs("4-capabilities"),
+    });
+  }
+  if (handshake.compaction && !has.sessions) {
+    found.push({
+      code: "KB011",
+      severity: "error",
+      title: "compaction is declared without sessions",
+      detail: ["the backend compacts its own session state, which only sessions hand back to Kedi"],
+      help: "declare sessions and hand back the compacted state, or drop compaction",
       docs: docs("4-capabilities"),
     });
   }

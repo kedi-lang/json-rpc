@@ -42,8 +42,9 @@ export async function exchange(options: {
   kedi.onNotification("run/event", (params) => outcome.events.push(params));
   kedi.onRequest("model/complete", async (params) => {
     outcome.seen.push(params);
-    outcome.steps.push(`model ${params.model}`);
-    return { message: { role: "assistant", ...options.model(outcome.seen) } };
+    outcome.steps.push(params.purpose === "compaction" ? `summary ${params.model}` : `model ${params.model}`);
+    const { usage, ...reply } = options.model(outcome.seen);
+    return { message: { role: "assistant", ...reply }, ...(usage ? { usage } : {}) };
   });
   for (const method of ["approval/request", "budget/admit", "hook/invoke", "artifact/admit", "history/process", "media/get"] as const) {
     kedi.onRequest(method, async (params) => {

@@ -49,6 +49,8 @@ interface Fixture {
   capabilities?: string[];
   run?: JsonObject;
   model?: JsonObject[];
+  /** Replies to summary requests (`purpose: "compaction"`), apart from the turns' `model`. */
+  summaries?: JsonObject[];
   tools?: Record<string, { result?: Json; error?: string }>;
   budget?: Record<string, number>;
   failModels?: string[];
@@ -78,7 +80,12 @@ export function loadFixtures(directory?: string): Fixture[] {
 export async function preflight(bridge: Bridge, fixtures = loadFixtures()): Promise<PreflightReport> {
   const report: PreflightReport = { diagnostics: checkHandshake(bridge.handshake), passed: [], skipped: [], cached: false };
   if (report.diagnostics.some((diagnostic) => diagnostic.severity === "error")) return report;
-  const declared = bridge.handshake.capabilities as Record<string, boolean | undefined>;
+  // Capabilities, and what the handshake declares beside them: compaction, with a threshold.
+  const declared: Record<string, boolean | undefined> = {
+    ...(bridge.handshake.capabilities as Record<string, boolean | undefined>),
+    compaction: bridge.handshake.compaction !== undefined,
+    compactionThreshold: bridge.handshake.compaction?.threshold === true,
+  };
   if (!declared.testModel) {
     report.diagnostics.push({
       code: "KB090",
@@ -204,12 +211,20 @@ async function runFixture(bridge: Bridge, fixture: Fixture): Promise<string[]> {
   const events: JsonObject[] = [];
   const answers: Promise<{ method: string; answer: Answer }>[] = [];
   const script = [...(fixture.model ?? [])];
+  const summaries = [...(fixture.summaries ?? [])];
+  const summarized: JsonObject[] = [];
   const budget = { ...(fixture.budget ?? {}) };
+  let requestsAdmitted = 0;
   kedi.onMessage((message) => {
     if (typeof message.method === "string") sent.push(message.method);
     if (message.method === "run/event") events.push(message.params as JsonObject);
   });
   kedi.onRequest("model/complete", async (params) => {
+    if (params.purpose === "compaction") {
+      summarized.push(params);
+      const { usage, ...reply }: JsonObject = summaries.shift() ?? { parts: [{ type: "text", text: "A summary." }] };
+      return { message: { role: "assistant", ...reply }, ...(usage ? { usage } : {}) };
+    }
     seen.push(params);
     for (const action of fixture.onModelRequest?.[String(seen.length)] ?? []) {
       const { send, ...rest } = action;
@@ -218,8 +233,8 @@ async function runFixture(bridge: Bridge, fixture: Fixture): Promise<string[]> {
       else kedi.notify(send, params);
     }
     if (fixture.failModels?.includes(String(params.model))) throw new RpcError(-32002, `model ${params.model} is down`);
-    const reply = script.shift() ?? { parts: [{ type: "text", text: "done" }] };
-    return { message: { role: "assistant", ...reply } };
+    const { usage, ...reply }: JsonObject = script.shift() ?? { parts: [{ type: "text", text: "done" }] };
+    return { message: { role: "assistant", ...reply }, ...(usage ? { usage } : {}) };
   });
   kedi.onRequest("budget/admit", async (params): Promise<JsonObject> => {
     const dimension = String(params.dimension);
@@ -229,6 +244,7 @@ async function runFixture(bridge: Bridge, fixture: Fixture): Promise<string[]> {
       return { admitted: false, dimension, reason: "budget exhausted" };
     }
     if (left !== undefined) budget[dimension] = left - 1;
+    if (dimension === "request") requestsAdmitted += 1;
     return { admitted: true };
   });
   kedi.onRequest("history/process", async (params): Promise<JsonObject> => {
@@ -248,6 +264,19 @@ async function runFixture(bridge: Bridge, fixture: Fixture): Promise<string[]> {
     const answer = await withTimeout(settle("run", kedi.request("run", params)), "the run");
     const replies = await withTimeout(Promise.all(answers), "run/input");
     problems.push(...expectations(fixture.expect ?? {}, answer.answer, seen, sent, replies, events));
+    if (fixture.expect?.compacted) {
+      if (!summarized.length) problems.push("no summary request (model/complete with purpose compaction) reached Kedi");
+      const governed = bridge.handshake.capabilities.governed === true;
+      if (governed && requestsAdmitted !== seen.length + summarized.length) {
+        problems.push(`${requestsAdmitted} requests admitted, for ${seen.length} turn and ${summarized.length} summary requests: each needs budget/admit`);
+      }
+      for (const summary of fixture.summaries ?? []) {
+        const said = JSON.stringify(summary.parts);
+        if (events.some((event) => typeof event.text === "string" && said.includes(event.text) && event.text.length > 0)) {
+          problems.push("a run/event reported the summary request's text: a summary is no turn of the run");
+        }
+      }
+    }
   } catch (error) {
     problems.push(String((error as Error).message ?? error));
   } finally {
