@@ -1,0 +1,6 @@
+# The fast_agent package: `> import: fast_agent`, then `> agent: fast_agent` runs fast-agent
+# (fast-agent.ai).
+#
+# The bridge (bridge.py, convert.py) and the Python bridge SDK (kedi_bridge) are added by the
+# release workflow, or by assemble.sh; see
+# https://github.com/kedi-lang/json-rpc/tree/main/python/fast-agent.

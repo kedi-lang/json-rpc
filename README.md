@@ -23,6 +23,8 @@ other side is `JsonRpcAdapter`; see
 | `packages/pi/` | The `pi` Kedi package: `> import: pi`, then `> agent: pi` |
 | `python/` | The Python bridge SDK (`kedi-bridge`): the same `serve()`, preflight and diagnostics, standard library only |
 | `python/hermes/` | The bridge for [Hermes Agent](https://github.com/NousResearch/hermes-agent), on the Python SDK (in progress) |
+| `python/fast-agent/` | The bridge for [fast-agent](https://fast-agent.ai), on the Python SDK |
+| `packages/fast_agent/` | The `fast_agent` Kedi package: `> import: fast_agent`, then `> agent: fast_agent` |
 
 The reference bridge for OpenAI-compatible endpoints ships with Kedi
 (`kedi/agent_adapter/adapters/jsonrpc/openai_chat_bridge.mjs`).

@@ -1,0 +1,9 @@
+> package: fast_agent:
+  version: 0.1.0
+  source: src/fast_agent
+  license: Apache-2.0
+  adapters:
+    fast_agent:
+      kind: agent
+      command: python bridge.py
+      environment: uv

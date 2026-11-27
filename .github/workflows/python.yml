@@ -81,3 +81,38 @@ jobs:
         run: |
           packages/hermes/assemble.sh
           ${{ github.workspace }}/hermes-venv/bin/python packages/hermes/src/hermes/bridge.py --check
+
+  fast-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: fast-agent from the package's lockfile
+        working-directory: packages/fast_agent/src/fast_agent
+        run: uv sync --frozen --no-dev
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/fast-agent-venv
+      - name: Real mode against a stub upstream, every request on the wire admitted
+        working-directory: python/fast-agent
+        run: ${{ github.workspace }}/fast-agent-venv/bin/python -m unittest discover -s tests -v
+        env:
+          PYTHONPATH: ${{ github.workspace }}/python/src
+      - name: The fast-agent bridge passes its preflight
+        working-directory: python/fast-agent
+        run: ${{ github.workspace }}/fast-agent-venv/bin/python bridge.py --check
+        env:
+          PYTHONPATH: ${{ github.workspace }}/python/src
+      - name: The fast-agent bridge passes the fixtures over stdio, every frame checked against the schema
+        run: |
+          python -m pip install "jsonschema==4.26.0"
+          python testing/fake_kedi.py --bridge "${{ github.workspace }}/fast-agent-venv/bin/python python/fast-agent/bridge.py" fixtures/v1/*.json
+        env:
+          PYTHONPATH: ${{ github.workspace }}/python/src
+          KEDI_BRIDGE_PREFLIGHT: "off"
+      - name: The assembled fast_agent package passes the preflight
+        run: |
+          packages/fast_agent/assemble.sh
+          ${{ github.workspace }}/fast-agent-venv/bin/python packages/fast_agent/src/fast_agent/bridge.py --check

@@ -1,0 +1,57 @@
+name: fast_agent release
+
+# Tags a release commit, off main, that holds the fast-agent bridge and the Python bridge SDK in
+# the package source (packages/fast_agent/assemble.sh): the Kedi package in packages/fast_agent
+# then installs from that tag, and a registry record can point at the tag's commit
+# (package_manifest_path: packages/fast_agent/package.kedi). fast-agent itself is not in the
+# package: Kedi installs it from the package's uv.lock when the package is installed.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The version in packages/fast_agent/package.kedi, such as 0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: The version is the manifest's, and not released yet
+        run: |
+          grep -qxF "  version: $VERSION" packages/fast_agent/package.kedi || {
+            echo "::error::packages/fast_agent/package.kedi does not declare version $VERSION"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/fast_agent-v$VERSION" >/dev/null; then
+            echo "::error::fast_agent-v$VERSION is already released"; exit 1
+          fi
+      - name: fast-agent from the package's lock, installed as Kedi installs it
+        run: |
+          UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/fast-agent-venv" UV_PYTHON_PREFERENCE=only-managed \
+            uv sync --frozen --no-dev --no-install-project --project packages/fast_agent/src/fast_agent
+      - name: The assembled package passes the preflight
+        run: |
+          packages/fast_agent/assemble.sh
+          "$RUNNER_TEMP/fast-agent-venv/bin/python" packages/fast_agent/src/fast_agent/bridge.py --check
+      - name: Tag the release commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --detach
+          git add -f packages/fast_agent/src/fast_agent/bridge.py packages/fast_agent/src/fast_agent/convert.py \
+            packages/fast_agent/src/fast_agent/kedi_bridge
+          git commit -q -m "fast_agent $VERSION: the bridge and the Python bridge SDK"
+          git tag -a "fast_agent-v$VERSION" -m "fast_agent $VERSION"
+          git push origin "fast_agent-v$VERSION"
+          {
+            echo "## fast_agent $VERSION"
+            echo
+            echo "- tag: \`fast_agent-v$VERSION\`"
+            echo "- verified_commit: \`$(git rev-parse HEAD)\`"
+            echo "- package_manifest_path: \`packages/fast_agent/package.kedi\`"
+          } >> "$GITHUB_STEP_SUMMARY"
