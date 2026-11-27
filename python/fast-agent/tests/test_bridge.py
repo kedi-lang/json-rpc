@@ -57,6 +57,8 @@ sys.path.insert(0, sys.argv[0].rsplit("/", 1)[0])
 runpy.run_path(sys.argv[0], run_name="__main__")
 """
 CALL = {"tool": "lookup", "arguments": {"city": "Lyon"}}
+# A file in the bridge's working directory, for fast-agent's own file tools.
+NOTE = {"note.txt": "The secret word is kedi.\n"}
 # A stdio MCP server with one tool that changes something, as a Kedi `> mcp:` server.
 MCP = {"name": "stub", "transport": "stdio", "command": sys.executable, "args": [str(HERE / "mcp_server.py")], "env": {}}
 
@@ -121,9 +123,12 @@ class Kedi:
     """The bridge as a subprocess, and Kedi's side of the connection."""
 
     def __init__(
-        self, upstream: Upstream, *, request_limit: int | None = None, resending: bool = False, approval: str = "allow"
+        self, upstream: Upstream, *, request_limit: int | None = None, resending: bool = False, approval: str = "allow",
+        files: dict[str, str] | None = None,
     ) -> None:
         self.directory = Path(tempfile.mkdtemp(prefix="kedi-fast-agent-test-"))
+        for name, text in (files or {}).items():
+            (self.directory / name).write_text(text)
         command = [sys.executable, str(BRIDGE / "bridge.py")]
         if resending:
             (self.directory / "resending.py").write_text(RESENDING)
@@ -194,10 +199,11 @@ class Kedi:
 
 
 def converse(
-    replies: list[Any], *, request_limit: int | None = None, resending: bool = False, approval: str = "allow", **params: Any
+    replies: list[Any], *, request_limit: int | None = None, resending: bool = False, approval: str = "allow",
+    files: dict[str, str] | None = None, **params: Any,
 ) -> tuple[dict[str, Any], Upstream, Kedi]:
     upstream = Upstream(replies)
-    kedi = Kedi(upstream, request_limit=request_limit, resending=resending, approval=approval)
+    kedi = Kedi(upstream, request_limit=request_limit, resending=resending, approval=approval, files=files)
     try:
         return kedi.run(**params), upstream, kedi
     finally:
@@ -264,7 +270,49 @@ class RealModeTests(unittest.TestCase):
 
     def test_with_code_mode_off_the_code_tool_stays_off(self) -> None:
         _, upstream, _ = converse([TEXT], tools=[LOOKUP])
-        self.assertEqual([tool["function"]["name"] for tool in upstream.hits[0]["tools"]], ["lookup"])
+        offered = [tool["function"]["name"] for tool in upstream.hits[0]["tools"]]
+        self.assertIn("lookup", offered)
+        self.assertNotIn("exec_sandbox", offered)
+
+    def test_fast_agents_own_tools_take_kedis_approval_at_their_risk(self) -> None:
+        read = {"tool": "read_text_file", "arguments": {"path": "note.txt"}}
+        for decision, outcome in (("allow", "secret word is kedi"), ("deny", "not today")):
+            with self.subTest(decision):
+                answer, upstream, kedi = converse([read, TEXT], approval=decision, files=NOTE)
+                self.assertIn("result", answer, answer)
+                approvals = [(approval["tool"], approval["risk"], approval["origin"]) for approval in kedi.approvals]
+                self.assertEqual(approvals, [("read_text_file", "read_only", "adapter_native")])
+                self.assertIn(outcome, json.dumps(upstream.hits[1]["messages"][-1]))
+                if decision == "deny":
+                    self.assertNotIn("secret word", json.dumps(upstream.hits[1]["messages"]))
+
+    def test_a_shell_command_runs_only_once_kedi_approves_it(self) -> None:
+        marker = Path(tempfile.mkdtemp(prefix="kedi-fast-agent-shell-")) / "ran.txt"
+        try:
+            shell = {"tool": "bash", "arguments": {"command": f"touch {marker}"}}
+            for decision, runs in (("deny", False), ("allow", True)):
+                with self.subTest(decision):
+                    answer, _, kedi = converse([shell, TEXT], approval=decision)
+                    self.assertIn("result", answer, answer)
+                    self.assertEqual([(approval["tool"], approval["risk"]) for approval in kedi.approvals], [("bash", "sensitive")])
+                    self.assertEqual(marker.exists(), runs)
+        finally:
+            shutil.rmtree(marker.parent, ignore_errors=True)
+
+    def test_code_reaches_files_only_through_the_file_tools(self) -> None:
+        source = (
+            "r = await read_text_file(path='note.txt')\nprint(r)\n"
+            "try:\n    print(open('note.txt').read())\nexcept Exception as error:\n    print('open failed')"
+        )
+        answer, upstream, kedi = converse(
+            [{"tool": "exec_sandbox", "arguments": {"code": source}}, TEXT], files=NOTE, codemode=True
+        )
+        self.assertIn("result", answer, answer)
+        self.assertEqual([tool["function"]["name"] for tool in upstream.hits[0]["tools"]], ["exec_sandbox"])
+        self.assertEqual([(approval["tool"], approval["risk"]) for approval in kedi.approvals], [("read_text_file", "read_only")])
+        said = json.dumps(upstream.hits[1]["messages"][-1])
+        self.assertEqual(said.count("secret word is kedi"), 1, said)
+        self.assertIn("open failed", said)
 
     def test_kedis_system_text_reaches_the_wire_as_written(self) -> None:
         system = "Keep {{currentDate}}, {{file:notes.txt}}, {{url:https://example.com/x}} and {{env}} as written."

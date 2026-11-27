@@ -24,9 +24,11 @@ import asyncio
 import concurrent.futures
 import json
 import os
+import sys
 import tempfile
 import threading
 import uuid
+from collections.abc import Awaitable, Callable
 from concurrent.futures import Future
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -54,6 +56,7 @@ import httpx  # noqa: E402
 import openai  # noqa: E402
 from fast_agent import FastAgent  # noqa: E402
 from fast_agent.agents.llm_decorator import LlmDecorator  # noqa: E402
+from fast_agent.agents.mcp_agent import McpAgent  # noqa: E402
 from fast_agent.config import (  # noqa: E402
     CompactionSettings,
     MCPElicitationSettings,
@@ -75,6 +78,11 @@ from fast_agent.llm.reasoning_effort import parse_reasoning_setting  # noqa: E40
 from fast_agent.llm.stream_types import StreamChunk  # noqa: E402
 from fast_agent.mcp.mcp_aggregator import MCPAggregator  # noqa: E402
 from fast_agent.mcp.prompt import Prompt  # noqa: E402
+from fast_agent.ptc.runtime import ProgrammaticToolRuntime  # noqa: E402
+from fast_agent.tools.filesystem_tool_definitions import (  # noqa: E402
+    ATTACH_MEDIA_TOOL_NAME,
+    READ_TEXT_FILE_TOOL_NAME,
+)
 from fast_agent.types import PromptMessageExtended  # noqa: E402
 from fast_agent.types.llm_stop_reason import LlmStopReason  # noqa: E402
 from fastmcp.tools import FunctionTool, ToolResult  # noqa: E402
@@ -400,13 +408,30 @@ for _name in ("_generate_with_summary", "_structured_with_summary", "_structured
     setattr(LlmDecorator, _name, _compacting_first(getattr(LlmDecorator, _name)))
 
 
+async def _native_call(
+    turn: Turn, call: NativeToolCall, invoke: Callable[[dict[str, Any]], Awaitable[CallToolResult]]
+) -> CallToolResult:
+    """A call of a tool that is not Kedi's (fast-agent's own, or a tool of Kedi's MCP servers),
+    through every step Kedi decides: the pre hook, approval, admission, the call, the post hooks,
+    artifact admission. Calls from fast-agent's code tool take the same path."""
+    before = await asyncio.to_thread(turn.run.before_native_tool, call)
+    if isinstance(before, Refused):
+        return CallToolResult(is_error=True, content=[TextContent(type="text", text=before.reason)])
+    result = await invoke(before.arguments)
+    said = convert.result_value(result)
+    if result.is_error:
+        outcome = await asyncio.to_thread(turn.run.after_native_tool, call, before.arguments, error=RuntimeError(convert.text(said)))
+    else:
+        outcome = await asyncio.to_thread(turn.run.after_native_tool, call, before.arguments, result=said)
+    value = outcome["result"] if outcome["ok"] else outcome["error"]
+    return CallToolResult(is_error=not outcome["ok"], content=[TextContent(type="text", text=convert.text(value))])
+
+
 _call_mcp_tool = MCPAggregator.call_tool
 
 
 async def _governed_mcp(self: MCPAggregator, name: str, arguments: dict[str, Any] | None = None, tool_use_id: str | None = None, **kwargs: Any) -> CallToolResult:
-    """A call of a tool of Kedi's MCP servers, through every step Kedi decides: the pre hook,
-    approval, admission, the call, the post hooks, artifact admission. Calls from fast-agent's
-    code tool take the same path."""
+    """A call of a tool of Kedi's MCP servers, through Kedi's steps."""
     turn = CURRENT.get()
     if turn is None:
         return await _call_mcp_tool(self, name, arguments, tool_use_id, **kwargs)
@@ -422,20 +447,70 @@ async def _governed_mcp(self: MCPAggregator, name: str, arguments: dict[str, Any
         description=known.tool.description if known else None,
         input_schema=known.tool.input_schema if known else None,
     )
-    before = await asyncio.to_thread(turn.run.before_native_tool, call)
-    if isinstance(before, Refused):
-        return CallToolResult(is_error=True, content=[TextContent(type="text", text=before.reason)])
-    result = await _call_mcp_tool(self, name, before.arguments, tool_use_id, **kwargs)
-    said = convert.result_value(result)
-    if result.is_error:
-        outcome = await asyncio.to_thread(turn.run.after_native_tool, call, before.arguments, error=RuntimeError(convert.text(said)))
-    else:
-        outcome = await asyncio.to_thread(turn.run.after_native_tool, call, before.arguments, result=said)
-    value = outcome["result"] if outcome["ok"] else outcome["error"]
-    return CallToolResult(is_error=not outcome["ok"], content=[TextContent(type="text", text=convert.text(value))])
+    return await _native_call(turn, call, lambda args: _call_mcp_tool(self, name, args, tool_use_id, **kwargs))
 
 
 MCPAggregator.call_tool = _governed_mcp  # type: ignore[method-assign]
+
+
+def _own_tool(agent: McpAgent, name: str) -> tuple[str, Any] | None:
+    """A tool of fast-agent's own, as pi's are: its file tools and its shell, with the risk Kedi
+    asks approval at (reading, changing files, running commands) and its definition; None for
+    any other tool."""
+    files = agent._filesystem_runtime
+    tool = next((tool for tool in files.tools if tool.name == name), None) if files is not None else None
+    if tool is not None:
+        return ("read_only" if name in (READ_TEXT_FILE_TOOL_NAME, ATTACH_MEDIA_TOOL_NAME) else "mutating"), tool
+    shell = agent._shell_runtime
+    if shell is not None and shell.owns_tool(name):
+        return "sensitive", next((tool for tool in shell.tools if tool.name == name), None)
+    return None
+
+
+_call_local_tool = McpAgent._call_local_tool
+
+
+async def _governed_own(self: McpAgent, name: str, arguments: dict[str, Any] | None = None, tool_use_id: str | None = None, **kwargs: Any) -> CallToolResult | None:
+    """A call of one of fast-agent's own tools, through Kedi's steps; Kedi's tools go to Kedi
+    with tool/call instead."""
+    turn = CURRENT.get()
+    own = _own_tool(self, name) if turn is not None else None
+    if turn is None or own is None:
+        return await _call_local_tool(self, name, arguments, tool_use_id, **kwargs)
+    risk, tool = own
+    call = NativeToolCall(
+        call_id=tool_use_id or f"call-{uuid.uuid4().hex[:12]}",
+        name=name,
+        arguments=arguments or {},
+        origin="adapter_native",
+        risk=risk,
+        description=tool.description if tool is not None else None,
+        input_schema=tool.inputSchema if tool is not None else None,
+    )
+
+    async def invoke(args: dict[str, Any]) -> CallToolResult:
+        result = await _call_local_tool(self, name, args, tool_use_id, **kwargs)
+        assert result is not None, name
+        return result
+
+    return await _native_call(turn, call, invoke)
+
+
+McpAgent._call_local_tool = _governed_own  # type: ignore[method-assign]
+
+# With its shell on, fast-agent lets sandbox code open the machine's files itself ("not a
+# filesystem sandbox"), in place of read_text_file, and no step of Kedi's would see it. Code
+# reaches files only through the file tools, as a direct call does: read_text_file stays one of
+# the sandbox's functions, and the sandbox gets no host file access.
+McpAgent._sandbox_file_reads = lambda self: None  # type: ignore[method-assign]
+_model_tools = ProgrammaticToolRuntime.model_tools
+
+
+def _files_through_tools(self: ProgrammaticToolRuntime, *args: Any, **kwargs: Any) -> Any:
+    return _model_tools(self, *args, **{**kwargs, "file_read": False, "file_write": False})
+
+
+ProgrammaticToolRuntime.model_tools = _files_through_tools  # type: ignore[method-assign]
 
 
 def _mcp_server(name: str, server: JsonObject) -> MCPServerSettings:
@@ -598,6 +673,10 @@ class FastAgentBridge:
     }
     files: list[str] = ["convert.py"]
 
+    def __init__(self, cwd: Path | None = None) -> None:
+        self.cwd = cwd or Path.cwd()
+        """Where fast-agent's file tools and shell work."""
+
     def run(self, run: Run) -> JsonObject:
         future = asyncio.run_coroutine_threadsafe(self._run(run), LOOP)
         threading.Thread(target=_cancel_on_stop, args=(run, future), daemon=True).start()
@@ -629,6 +708,9 @@ class FastAgentBridge:
                 agent.llm.add_stream_listener(turn.stream)
                 for spec in run.params.get("tools") or []:
                     agent.add_tool(kedi_tool(spec))
+                # fast-agent's own tools, as pi's: its file tools and its shell, in the working
+                # directory, each call through Kedi's steps.
+                agent.enable_shell(self.cwd)
                 servers = [f"s{index}" for index, _ in enumerate(run.params.get("mcpServers") or [], 1)]
                 for name, server in zip(servers, run.params.get("mcpServers") or []):
                     await agent.attach_mcp_server(server_name=name, server_config=_mcp_server(name, server))
@@ -663,14 +745,14 @@ class FastAgentBridge:
 
 
 async def _check_tools(agent: Any, run: Run, servers: list[str], *, code_mode: bool) -> None:
-    """The model sees Kedi's tools and its servers' and nothing else; with code mode on, only
-    the code tool, whose code reaches only those. A tool fast-agent turns on by default (its code
-    tool, subagents, image generation, ...) or a function of its own in the sandbox (shell,
-    files, ...) would escape Kedi."""
+    """The model sees Kedi's tools, its servers' and fast-agent's own file tools and shell, all
+    through Kedi's steps, and nothing else; with code mode on, only the code tool, whose code
+    reaches only those. Any other tool fast-agent turns on (its subagents, image generation, web
+    search, ...) would escape Kedi."""
     kedi = {spec["name"] for spec in run.params.get("tools") or []}
 
     def given(name: str) -> bool:
-        return name in kedi or name.split("__", 1)[0] in servers
+        return name in kedi or name.split("__", 1)[0] in servers or _own_tool(agent, name) is not None
 
     surface = await agent.tool_surface()
     code_tool = surface.programmatic.tool_name if surface.programmatic is not None else None
@@ -691,4 +773,6 @@ def _cancel_on_stop(run: Run, future: Future[Any]) -> None:
 
 
 if __name__ == "__main__":
-    raise SystemExit(serve(FastAgentBridge()))
+    # python bridge.py [--cwd DIR]: fast-agent's tools work in DIR, the current directory by default.
+    cwd = Path(sys.argv[sys.argv.index("--cwd") + 1]) if "--cwd" in sys.argv else None
+    raise SystemExit(serve(FastAgentBridge(cwd)))
