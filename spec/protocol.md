@@ -71,7 +71,9 @@ needs it. A bridge must advertise only what it implements.
 applies (never Kedi's own settings: `context_limit`, `media_limit`, `request_retries`,
 `tool_reason`, `voice`), and `mcp.transports`, which needs `nativeTools`. `compaction`
 `{threshold}` says the backend compacts its session natively, which needs `sessions`;
-`threshold` says whether it honors an exact input-token threshold (§7).
+`threshold` says whether it honors an exact input-token threshold (§7). `codemode`
+`{language}` says the backend has a code mode of its own, model-written `python` or
+`javascript` that calls tools, which needs `tools` (§5).
 
 ## 5. Runs
 
@@ -88,6 +90,17 @@ answer and Kedi's correction, for the bridge to replay as the model's turn and a
 
 `run/cancel` stops a run; it answers with `-32003`. A run Kedi stopped itself (an exhausted
 budget, a denied step) gets `run/cancel` after Kedi answered the request that stopped it.
+
+**Native code mode** (with `codemode`). A run whose program asks for the backend's own code
+mode (`> codemode: native`) carries `codemode: {mode: "native"}`. The bridge then:
+- turns its backend's code mode on for the run, and offers Kedi's tools to the model's code
+  only, not as tools of their own;
+- sends each call the code makes as it would a direct one: Kedi's tools through `tool/call`,
+  its own through the `nativeTools` steps (§6);
+- gives the code no file, process, network or environment of the machine except through
+  those tools.
+
+Without the field, the backend's code mode stays off.
 
 ## 6. Steps Kedi Decides
 

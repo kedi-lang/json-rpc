@@ -142,7 +142,7 @@ class PreflightTests(unittest.TestCase):
         self.assertIn("governed-admits-each-request", report.passed)
         self.assertIn("usage", report.passed)
         self.assertEqual(sorted(name for name, _ in report.skipped), [
-            "compaction", "events", "history-processing", "interrupt", "interrupt-session", "interrupt-transcript",
+            "codemode-native", "compaction", "events", "history-processing", "interrupt", "interrupt-session", "interrupt-transcript",
             "live-input", "media-input", "model-fallback", "structured", "transcript",
         ])
 

@@ -80,11 +80,13 @@ export function loadFixtures(directory?: string): Fixture[] {
 export async function preflight(bridge: Bridge, fixtures = loadFixtures()): Promise<PreflightReport> {
   const report: PreflightReport = { diagnostics: checkHandshake(bridge.handshake), passed: [], skipped: [], cached: false };
   if (report.diagnostics.some((diagnostic) => diagnostic.severity === "error")) return report;
-  // Capabilities, and what the handshake declares beside them: compaction, with a threshold.
+  // Capabilities, and what the handshake declares beside them: compaction, with a threshold,
+  // and a code mode of the backend's own.
   const declared: Record<string, boolean | undefined> = {
     ...(bridge.handshake.capabilities as Record<string, boolean | undefined>),
     compaction: bridge.handshake.compaction !== undefined,
     compactionThreshold: bridge.handshake.compaction?.threshold === true,
+    codemode: bridge.handshake.codemode !== undefined,
   };
   if (!declared.testModel) {
     report.diagnostics.push({
@@ -342,6 +344,16 @@ function expectations(
     const request = seen[check.request - 1];
     if (strings(request).some((text) => text.includes(check.contains))) {
       found.push(`model request ${check.request} carried ${JSON.stringify(check.contains)}`);
+    }
+  }
+  for (const check of (expect.modelTools as { request: number; excludes?: string[]; atLeast?: number }[] | undefined) ?? []) {
+    const request = seen[check.request - 1] as { tools?: { name?: string }[] } | undefined;
+    const names = (request?.tools ?? []).map((tool) => tool.name);
+    if (names.length < (check.atLeast ?? 0)) {
+      found.push(`model request ${check.request} offered ${names.length} tools, expected at least ${check.atLeast}`);
+    }
+    for (const name of check.excludes ?? []) {
+      if (names.includes(name)) found.push(`model request ${check.request} offered ${JSON.stringify(name)} as a tool of its own`);
     }
   }
   for (const wanted of (expect.events as JsonObject[] | undefined) ?? []) {

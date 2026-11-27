@@ -87,6 +87,11 @@ export interface RunParams {
    * it, keep the backend's automatic compaction off.
    */
   compaction?: Compaction | null;
+  /**
+   * When the bridge declared `codemode` and the program asks for it: turn the backend's code
+   * mode on, and offer Kedi's tools to its code only. Without it, keep the code mode off.
+   */
+  codemode?: { mode: "native" } | null;
   subagent: {
     id: string | null;
     parentRunId: string | null;

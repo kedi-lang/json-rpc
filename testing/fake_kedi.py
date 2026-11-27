@@ -151,10 +151,12 @@ def _exercise(bridge: Bridge, fixture: dict[str, Any], outcome: Outcome) -> None
     )
     handshake = _answer_to(bridge, hello)
     capabilities = dict(handshake["result"]["capabilities"])
-    # What the handshake declares beside its capabilities: compaction, with a threshold.
+    # What the handshake declares beside its capabilities: compaction, with a threshold, and a
+    # code mode of the backend's own.
     compaction = handshake["result"].get("compaction")
     capabilities["compaction"] = compaction is not None
     capabilities["compactionThreshold"] = bool(compaction and compaction.get("threshold"))
+    capabilities["codemode"] = handshake["result"].get("codemode") is not None
     missing = [name for name in fixture.get("capabilities", []) if not capabilities.get(name)]
     if not capabilities.get("testModel"):
         missing.insert(0, "testModel")
@@ -329,6 +331,14 @@ def _check_expect(
         request = seen[check["request"] - 1] if len(seen) >= check["request"] else None
         if any(check["contains"] in text for text in _strings(request)):
             outcome.problems.append(f"model request {check['request']} carried {check['contains']!r}")
+    for check in expect.get("modelTools", []):
+        request = seen[check["request"] - 1] if len(seen) >= check["request"] else {}
+        names = [tool.get("name") for tool in request.get("tools") or []]
+        if len(names) < check.get("atLeast", 0):
+            outcome.problems.append(f"model request {check['request']} offered {len(names)} tools, expected at least {check['atLeast']}")
+        for name in check.get("excludes", []):
+            if name in names:
+                outcome.problems.append(f"model request {check['request']} offered {name!r} as a tool of its own")
     events = [frame.get("params", {}) for side, frame in frames if side == "bridge" and frame.get("method") == "run/event"]
     for wanted in expect.get("events", []):
         if not any(_contains(event, wanted) for event in events):

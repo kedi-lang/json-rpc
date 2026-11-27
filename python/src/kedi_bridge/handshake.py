@@ -19,6 +19,7 @@ KEDI_SETTINGS = frozenset({"context_limit", "media_limit", "request_retries", "t
 EFFORT_LEVELS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max"})
 MEDIA_KINDS = frozenset({"image", "audio", "video", "document"})
 TRANSPORTS = frozenset({"stdio", "http", "sse"})
+CODE_LANGUAGES = frozenset({"python", "javascript"})
 
 
 def check_handshake(handshake: dict[str, Any]) -> list[Diagnostic]:
@@ -56,6 +57,15 @@ def check_handshake(handshake: dict[str, Any]) -> list[Diagnostic]:
             ["the backend compacts its own session state, which only sessions hand back to Kedi"],
             "declare sessions and hand back the compacted state, or drop compaction", docs("4-capabilities"),
         ))
+    codemode = handshake.get("codemode")
+    if codemode is not None and not has.get("tools"):
+        found.append(Diagnostic(
+            "KB012", "error", "codemode is declared without tools",
+            ["the backend's code calls Kedi's tools, which tools/call reaches"],
+            "declare tools and offer them to the code, or drop codemode", docs("4-capabilities"),
+        ))
+    if codemode is not None and (codemode.get("language") if isinstance(codemode, dict) else None) not in CODE_LANGUAGES:
+        found.append(Diagnostic("KB013", "error", "codemode names no language", help="declare codemode: {language: python} or {language: javascript}"))
     if has.get("mediaInput") and not handshake.get("mediaKinds"):
         found.append(Diagnostic(
             "KB004", "error", "mediaInput is declared without mediaKinds",

@@ -39,6 +39,8 @@ export interface Handshake {
   mcp?: { transports: McpTransport[] };
   /** The backend compacts its session natively (needs `sessions`); `threshold`: it honors an exact one. */
   compaction?: { threshold: boolean };
+  /** The backend has a code mode of its own (needs `tools`): model-written code that calls tools. */
+  codemode?: { language: "python" | "javascript" };
 }
 
 const KNOWN_CAPABILITIES = new Set<string>([
@@ -101,6 +103,19 @@ export function checkHandshake(handshake: Handshake): Diagnostic[] {
       help: "declare sessions and hand back the compacted state, or drop compaction",
       docs: docs("4-capabilities"),
     });
+  }
+  if (handshake.codemode && !has.tools) {
+    found.push({
+      code: "KB012",
+      severity: "error",
+      title: "codemode is declared without tools",
+      detail: ["the backend's code calls Kedi's tools, which tools/call reaches"],
+      help: "declare tools and offer them to the code, or drop codemode",
+      docs: docs("4-capabilities"),
+    });
+  }
+  if (handshake.codemode && !["python", "javascript"].includes(handshake.codemode.language)) {
+    found.push({ code: "KB013", severity: "error", title: "codemode names no language", help: "declare codemode: {language: python} or {language: javascript}" });
   }
   if (has.mediaInput && !handshake.mediaKinds?.length) {
     found.push({

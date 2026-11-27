@@ -90,11 +90,13 @@ def preflight(bridge: Bridge, fixtures: list[JsonObject] | None = None) -> Prefl
     if report.errors:
         return report
     handshake = bridge.handshake
-    # Capabilities, and what the handshake declares beside them: compaction, with a threshold.
+    # Capabilities, and what the handshake declares beside them: compaction, with a threshold,
+    # and a code mode of the backend's own.
     declared = {
         **(handshake.get("capabilities") or {}),
         "compaction": handshake.get("compaction") is not None,
         "compactionThreshold": (handshake.get("compaction") or {}).get("threshold") is True,
+        "codemode": handshake.get("codemode") is not None,
     }
     if not declared.get("testModel"):
         report.diagnostics.append(Diagnostic(
@@ -370,6 +372,14 @@ def _expectations(
         request = seen[check["request"] - 1] if len(seen) >= check["request"] else None
         if any(check["contains"] in text for text in _strings(request)):
             found.append(f"model request {check['request']} carried {json.dumps(check['contains'])}")
+    for check in expect.get("modelTools") or []:
+        request = seen[check["request"] - 1] if len(seen) >= check["request"] else {}
+        names = [tool.get("name") for tool in request.get("tools") or []]
+        if len(names) < check.get("atLeast", 0):
+            found.append(f"model request {check['request']} offered {len(names)} tools, expected at least {check['atLeast']}")
+        for name in check.get("excludes") or []:
+            if name in names:
+                found.append(f"model request {check['request']} offered {json.dumps(name)} as a tool of its own")
     for wanted in expect.get("events") or []:
         if not any(_contains(event, wanted) for event in events):
             found.append(f"no run/event held {json.dumps(wanted)}; the bridge sent {json.dumps(events)}")
