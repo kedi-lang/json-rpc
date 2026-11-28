@@ -187,6 +187,8 @@ class Turn:
     fallbacks: dict[str, FastAgentLLM] = field(default_factory=dict)
     compacting: bool = False
     compact_due: bool = False
+    data: JsonObject | None = None
+    """The answer the model gave with the output tool, for a run with an output schema."""
 
     def arrived(self, texts: list[str]) -> None:
         with self.lock:
@@ -354,6 +356,11 @@ async def _governed(self: FastAgentLLM, func: Any, *args: Any, **kwargs: Any) ->
         raise RuntimeError("a fast-agent model request outside a Kedi run")
 
     async def attempt(*a: Any, **kw: Any) -> PromptMessageExtended:
+        if turn.data is not None and not turn.compacting:
+            # The model gave its answer with the output tool: the turn ends there, as on Kedi's
+            # own adapters, and no request is sent. The answer is the turn's last message.
+            answer = TextContent(type="text", text=json.dumps(turn.data, ensure_ascii=False))
+            return PromptMessageExtended(role="assistant", content=[answer], stop_reason=LlmStopReason.END_TURN)
         request = Request(turn, self, func, a, kw)
         try:
             reply = await asyncio.to_thread(turn.run.model_request, request)
@@ -562,17 +569,33 @@ class KediTool(FunctionTool):
         return ToolResult(content=[TextContent(type="text", text=text)])
 
 
+class OutputTool(FunctionTool):
+    """The run's answer, for a run with an output schema: the model gives its data by calling
+    this tool, after any tools it needs, as on Kedi's own adapters."""
+
+    async def run(self, arguments: dict[str, Any]) -> ToolResult:  # type: ignore[override]
+        turn = CURRENT.get()
+        assert turn is not None
+        turn.data = arguments
+        return ToolResult(content=[TextContent(type="text", text="Answer recorded.")])
+
+
+def _function_tool(cls: type[FunctionTool], name: str, description: str, parameters: JsonObject, **extra: Any) -> Any:
+    fields: dict[str, Any] = {field: None for field in FunctionTool.model_fields}
+    fields.update(name=name, description=description, parameters=parameters, fn=lambda **_: None, tags=set(), run_in_thread=False, **extra)
+    return cls.model_construct(**fields)
+
+
 def kedi_tool(spec: JsonObject) -> KediTool:
-    fields: dict[str, Any] = {name: None for name in FunctionTool.model_fields}
-    fields.update(
-        name=spec["name"],
-        description=spec.get("description") or "",
-        parameters=spec.get("inputSchema") or {"type": "object", "properties": {}},
-        fn=lambda **_: None,
-        tags=set(),
-        run_in_thread=False,
+    return _function_tool(KediTool, spec["name"], spec.get("description") or "", spec.get("inputSchema") or {"type": "object", "properties": {}})
+
+
+def output_tool(output: JsonObject) -> OutputTool:
+    # With code mode on, the answer stays the model's own tool, next to the code tool.
+    return _function_tool(
+        OutputTool, output["toolName"], "Give your final answer by calling this tool with it.", output["schema"],
+        meta={"fast_agent": {"ptc": {"expose": "direct"}}},
     )
-    return KediTool.model_construct(**fields)
 
 
 def _model_name(name: str) -> str:
@@ -634,6 +657,18 @@ def _opening(run: Run) -> list[PromptMessageExtended]:
     rejected = continuation["answer"]
     said = rejected["text"] if isinstance(rejected.get("text"), str) else json.dumps(rejected.get("data", rejected), ensure_ascii=False)
     return [user, Prompt.assistant(said), Prompt.user(continuation["message"])]
+
+
+def _answer(message: PromptMessageExtended, data: JsonObject | None) -> JsonObject:
+    """A structured run's answer: the output tool's data, or the model's text as JSON when it
+    answered without the tool; Kedi asks again for anything else."""
+    if data is not None:
+        return {"data": data}
+    said = message.last_text() or ""
+    try:
+        return {"data": json.loads(said)}
+    except json.JSONDecodeError as error:
+        return {"invalid": said, "error": str(error)}
 
 
 def _request_params(run: Run) -> RequestParams | None:
@@ -708,6 +743,10 @@ class FastAgentBridge:
                 agent.llm.add_stream_listener(turn.stream)
                 for spec in run.params.get("tools") or []:
                     agent.add_tool(kedi_tool(spec))
+                output = run.params.get("output") or {}
+                structured = bool(output.get("schema")) and not output.get("media")
+                if structured:
+                    agent.add_tool(output_tool(output))
                 # fast-agent's own tools, as pi's: its file tools and its shell, in the working
                 # directory, each call through Kedi's steps.
                 agent.enable_shell(self.cwd)
@@ -725,14 +764,8 @@ class FastAgentBridge:
                 turn.opening = await asyncio.to_thread(_opening, run)
                 run.on_input(turn.arrived, on="arrival")
                 run.on_interrupt(turn.back)
-                params = _request_params(run)
-                output = run.params.get("output") or {}
-                if output.get("schema") and not output.get("media"):
-                    data, message = await agent.structured_schema(turn.opening, output["schema"], params)
-                    answer: JsonObject = {"data": data} if data is not None else {"invalid": message.last_text() or "", "error": "not JSON matching the schema"}
-                else:
-                    message = await agent.generate(turn.opening, params)
-                    answer = {"text": message.last_text() or ""}
+                message = await agent.generate(turn.opening, _request_params(run))
+                answer: JsonObject = _answer(message, turn.data) if structured else {"text": message.last_text() or ""}
                 if run.stop_reason is not None:
                     raise run.stop_reason
                 await turn.compact(agent, mid_turn=False)
@@ -740,6 +773,16 @@ class FastAgentBridge:
                     said = message.last_text() or "fast-agent's model request failed"
                     raise RpcError(ErrorCode.RUN_FAILED, said, {"harness": {"type": "FastAgentError", "message": said}})
                 return {**answer, **turn.back()}
+        except SystemExit as stopped:
+            # fast-agent's app ends the process on a provider or configuration error: fast.run()
+            # catches ProviderKeyError, which is how it classes any Google API error, a 429
+            # included, and raises SystemExit, which would stop the bridge's event loop for good.
+            # The run fails with the error instead, and the bridge serves on.
+            if run.stop_reason is not None:
+                raise run.stop_reason from None
+            error = stopped.__cause__ or stopped
+            said = str(error) or type(error).__name__
+            raise RpcError(ErrorCode.RUN_FAILED, said, {"harness": {"type": type(error).__name__, "message": said}}) from None
         finally:
             CURRENT.reset(token)
 
@@ -749,7 +792,7 @@ async def _check_tools(agent: Any, run: Run, servers: list[str], *, code_mode: b
     through Kedi's steps, and nothing else; with code mode on, only the code tool, whose code
     reaches only those. Any other tool fast-agent turns on (its subagents, image generation, web
     search, ...) would escape Kedi."""
-    kedi = {spec["name"] for spec in run.params.get("tools") or []}
+    kedi = {spec["name"] for spec in run.params.get("tools") or []} | {(run.params.get("output") or {}).get("toolName")}
 
     def given(name: str) -> bool:
         return name in kedi or name.split("__", 1)[0] in servers or _own_tool(agent, name) is not None
@@ -776,3 +819,4 @@ if __name__ == "__main__":
     # python bridge.py [--cwd DIR]: fast-agent's tools work in DIR, the current directory by default.
     cwd = Path(sys.argv[sys.argv.index("--cwd") + 1]) if "--cwd" in sys.argv else None
     raise SystemExit(serve(FastAgentBridge(cwd)))
+

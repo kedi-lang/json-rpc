@@ -33,9 +33,8 @@ RUN = {
 }
 LOOKUP = {"name": "lookup", "description": "A city's country.", "inputSchema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}
 TEXT = {"content": "Lyon is in France."}
-# Runs the bridge with fast-agent's own send-again-without-streaming back on, as a provider that
-# sends a second request inside one would: the wire must refuse it.
-RESENDING = """
+# Runs the bridge with fast-agent patched as a test needs.
+WRAPPER = """
 import runpy
 import sys
 
@@ -46,8 +45,9 @@ served = kedi_bridge.serve
 
 def serve(bridge):
     from fast_agent.llm.provider.openai.llm_openai import OpenAILLM
+    from fast_agent.core.exceptions import ProviderKeyError
 
-    OpenAILLM._fallback_to_non_streaming_on_empty_stream = lambda self, model: True
+{patch}
     return served(bridge)
 
 
@@ -56,6 +56,15 @@ sys.argv = [sys.argv[1]]
 sys.path.insert(0, sys.argv[0].rsplit("/", 1)[0])
 runpy.run_path(sys.argv[0], run_name="__main__")
 """
+# fast-agent's own send-again-without-streaming back on, as a provider that sends a second
+# request inside one would: the wire must refuse it.
+RESENDING = "    OpenAILLM._fallback_to_non_streaming_on_empty_stream = lambda self, model: True"
+# A provider error fast-agent's app ends the process for, as it does for Google's 429.
+QUOTA = """
+    async def quota(self, *args, **kwargs):
+        raise ProviderKeyError("Google API Error: 429", "You exceeded your current quota.")
+
+    OpenAILLM._openai_completion = quota"""
 CALL = {"tool": "lookup", "arguments": {"city": "Lyon"}}
 # A file in the bridge's working directory, for fast-agent's own file tools.
 NOTE = {"note.txt": "The secret word is kedi.\n"}
@@ -123,16 +132,16 @@ class Kedi:
     """The bridge as a subprocess, and Kedi's side of the connection."""
 
     def __init__(
-        self, upstream: Upstream, *, request_limit: int | None = None, resending: bool = False, approval: str = "allow",
+        self, upstream: Upstream, *, request_limit: int | None = None, patch: str | None = None, approval: str = "allow",
         files: dict[str, str] | None = None,
     ) -> None:
         self.directory = Path(tempfile.mkdtemp(prefix="kedi-fast-agent-test-"))
         for name, text in (files or {}).items():
             (self.directory / name).write_text(text)
         command = [sys.executable, str(BRIDGE / "bridge.py")]
-        if resending:
-            (self.directory / "resending.py").write_text(RESENDING)
-            command = [sys.executable, str(self.directory / "resending.py"), str(BRIDGE / "bridge.py")]
+        if patch is not None:
+            (self.directory / "wrapper.py").write_text(WRAPPER.replace("{patch}", patch))
+            command = [sys.executable, str(self.directory / "wrapper.py"), str(BRIDGE / "bridge.py")]
         env = {
             **os.environ,
             "PYTHONPATH": str(BRIDGE.parent / "src"),
@@ -199,11 +208,11 @@ class Kedi:
 
 
 def converse(
-    replies: list[Any], *, request_limit: int | None = None, resending: bool = False, approval: str = "allow",
+    replies: list[Any], *, request_limit: int | None = None, patch: str | None = None, approval: str = "allow",
     files: dict[str, str] | None = None, **params: Any,
 ) -> tuple[dict[str, Any], Upstream, Kedi]:
     upstream = Upstream(replies)
-    kedi = Kedi(upstream, request_limit=request_limit, resending=resending, approval=approval, files=files)
+    kedi = Kedi(upstream, request_limit=request_limit, patch=patch, approval=approval, files=files)
     try:
         return kedi.run(**params), upstream, kedi
     finally:
@@ -220,6 +229,19 @@ class RealModeTests(unittest.TestCase):
         self.assertEqual([call["name"] for call in kedi.tool_calls], ["lookup"])
         self.assertEqual(kedi.tool_calls[0]["arguments"], {"city": "Lyon"})
 
+    def test_a_structured_answer_comes_from_the_output_tool_after_the_tools_it_needs(self) -> None:
+        output = {"schema": {"type": "object", "properties": {"country": {"type": "string"}}, "required": ["country"]}, "toolName": "final_result"}
+        answered = {"tool": "final_result", "arguments": {"country": "France"}}
+        answer, upstream, kedi = converse([CALL, answered], tools=[LOOKUP], output=output)
+        self.assertEqual(answer.get("result", {}).get("data"), {"country": "France"}, answer)
+        self.assertEqual([call["name"] for call in kedi.tool_calls], ["lookup"])
+        # The model answers with the output tool, not under a forced JSON format; the turn ends
+        # there, with no request after the answer.
+        self.assertIn("final_result", [tool["function"]["name"] for tool in upstream.hits[0]["tools"]])
+        self.assertNotIn("response_format", upstream.hits[0])
+        self.assertEqual(len(upstream.hits), 2)
+        self.assertEqual(kedi.admissions.count("request"), 2)
+
     def test_a_request_kedi_denies_never_reaches_the_wire(self) -> None:
         answer, upstream, kedi = converse([CALL, TEXT], request_limit=1, tools=[LOOKUP])
         self.assertIn("request budget exhausted", answer.get("error", {}).get("message", ""), answer)
@@ -232,13 +254,28 @@ class RealModeTests(unittest.TestCase):
         self.assertEqual(len(upstream.hits), 1, "neither fast-agent nor the OpenAI SDK retries")
         self.assertEqual(kedi.admissions.count("request"), 1)
 
+    def test_a_provider_error_fast_agent_ends_its_app_for_fails_the_run(self) -> None:
+        # fast-agent's app ends the process (SystemExit) on a ProviderKeyError, as it classes
+        # Google's 429: the run fails with the provider's error, and the bridge serves on.
+        started = time.monotonic()
+        upstream = Upstream([TEXT])
+        kedi = Kedi(upstream, patch=QUOTA)
+        try:
+            answer = kedi.run()
+            self.assertLess(time.monotonic() - started, 60, answer)
+            self.assertIn("exceeded your current quota", answer.get("error", {}).get("message", ""), answer)
+            self.assertIn("error", kedi.run(), "a second run on the same bridge answers too")
+        finally:
+            kedi.close()
+            upstream.close()
+
     def test_an_empty_reply_is_not_asked_again_behind_kedi(self) -> None:
         answer, upstream, kedi = converse([{"content": ""}, TEXT])
         self.assertEqual(len(upstream.hits), 1, answer)
         self.assertEqual(kedi.admissions.count("request"), 1)
 
     def test_a_second_request_inside_one_kedi_admitted_is_refused_at_the_wire(self) -> None:
-        answer, upstream, kedi = converse([{"content": ""}, TEXT], resending=True)
+        answer, upstream, kedi = converse([{"content": ""}, TEXT], patch=RESENDING)
         self.assertIn("second request inside one Kedi admitted", answer.get("error", {}).get("message", ""), answer)
         self.assertEqual(len(upstream.hits), 1)
         self.assertEqual(kedi.admissions.count("request"), 1)

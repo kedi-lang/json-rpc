@@ -79,6 +79,13 @@ fast-agent reads each provider's credentials from its environment variables (`GO
   A run whose sandbox holds any other function is refused. The code tool's description is
   fast-agent's own text. Kedi's CodeMode settings (`> codemode:` with search or execution
   limits) do not apply to fast-agent's sandbox, so Kedi refuses them.
+- **Structured answers.** A run with an output schema gives the model an output tool,
+  `final_result`, as Kedi's own adapters do, not a forced JSON format: the model calls the
+  tools it needs, then answers by calling it, and the turn ends there with no further request.
+  An answer given as JSON text instead is taken too.
+- **Provider errors.** fast-agent's app exits on a provider error it classes as a key error,
+  which for Google is any API error, a 429 or 503 included. The run fails with the provider's
+  message instead, and the bridge serves on.
 - **Isolation.** The bridge gives fast-agent a home of its own. Installed as a Kedi package, the
   home is the package's runtime directory (`KEDI_PACKAGE_RUNTIME_DIR`). No user config, skill,
   plugin, card or session from `~/.fast-agent` reaches a run.
